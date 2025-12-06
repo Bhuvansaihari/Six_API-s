@@ -45,13 +45,19 @@ class SupabaseClient:
         self, 
         cand_id: int, 
         requirement_id: str, 
-        matching_id: int, 
-        similarity_score: float
+        matching_id: Optional[int] = None, 
+        similarity_score: Optional[float] = None
     ) -> Optional[dict]:
         """
         Insert or update application tracking record
         
         Uses upsert to handle unique constraint on (cand_id, requirement_id)
+        
+        Args:
+            cand_id: Candidate ID
+            requirement_id: Requirement/Job ID
+            matching_id: Optional matching ID from cand_job_matching (NULL for manual apply)
+            similarity_score: Optional similarity score (NULL for manual apply)
         """
         try:
             from datetime import datetime, timezone
@@ -60,11 +66,15 @@ class SupabaseClient:
             tracking_data = {
                 "cand_id": cand_id,
                 "requirement_id": requirement_id,
-                "matching_id": matching_id,
-                "similarity_score": similarity_score,
                 "application_status": "MATCHED",
                 "applied_at": datetime.now(timezone.utc).isoformat()
             }
+            
+            # Only include matching_id and similarity_score if provided
+            if matching_id is not None:
+                tracking_data["matching_id"] = matching_id
+            if similarity_score is not None:
+                tracking_data["similarity_score"] = similarity_score
             
             # Use upsert to handle unique constraint
             # This will insert if not exists, or update if exists

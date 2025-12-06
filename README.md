@@ -4,7 +4,7 @@ Unified FastAPI monorepo combining candidate synchronization, job application we
 
 ## Overview
 
-This project merges six FastAPI services into a single unified application:
+This project merges seven FastAPI services into a single unified application:
 
 1. **Apply Webhook API** - Listens to Supabase webhooks for job-candidate matches and automatically applies candidates to jobs
 2. **Candidate Sync API** - Synchronizes candidate data from SQL Server to Supabase
@@ -12,6 +12,7 @@ This project merges six FastAPI services into a single unified application:
 4. **Get Recommendations API** - Retrieves job recommendations for candidates using SQL Server stored procedures with caching and rate limiting
 5. **Get Requirement Details API** - Fetches requirement/job details by ID from SQL Server with caching and rate limiting
 6. **Outreach Agent V1 API** - Sends email (SendGrid) and SMS (Twilio) notifications to candidates when they're matched with jobs
+7. **Manual Apply API** - Manually applies a candidate to a job requirement by accepting candidate_id and requirement_id directly
 
 ---
 
@@ -42,6 +43,10 @@ This project merges six FastAPI services into a single unified application:
 │   │       └── schemas.py      # Pydantic models
 │   │   └── outreach_agent/     # Outreach Agent V1 API module
 │   │       ├── router.py       # FastAPI routes for webhook notifications
+│   │       └── schemas.py      # Pydantic models
+│   │   └── manual_apply/      # Manual Apply API module
+│   │       ├── router.py       # FastAPI routes for manual job applications
+│   │       ├── logic.py        # Business logic
 │   │       └── schemas.py      # Pydantic models
 │   ├── db/
 │   │   ├── __init__.py
@@ -616,6 +621,51 @@ Content-Type: application/json
 - Email uses SendGrid with HTML templates
 - SMS uses Twilio with phone number validation (E.164 format)
 - Concurrency is controlled by semaphore (default: 20, configurable via `MAX_CONCURRENT_TASKS`)
+
+### Manual Apply API
+
+- `POST /apply-job` - Manually applies a candidate to a job requirement
+
+**Request Body:**
+```json
+{
+  "cand_id": 2928,
+  "requirement_id": 130174
+}
+```
+
+**Response (Success - 200):**
+```json
+{
+  "success": true,
+  "message": "Job application submitted successfully",
+  "cand_id": 2928,
+  "requirement_id": 130174,
+  "selection_id": 12345,
+  "application_id": 789
+}
+```
+
+**Response (Error - 400):**
+```json
+{
+  "detail": "Candidate with cand_id 2928 not found in auto_apply_cand table"
+}
+```
+
+**Features:**
+- ✅ Direct application without webhook or similarity score requirement
+- ✅ Fetches candidate data from Supabase `auto_apply_cand` table
+- ✅ Executes `Usp_SC_JobSeeker_IU_ApplyJob` stored procedure in SQL Server
+- ✅ Creates tracking record in `job_application_tracking` table
+- ✅ Tracking record has NULL `matching_id` and `similarity_score` (manual application)
+- ✅ Uses same retry logic and error handling as webhook API
+
+**Note:**
+- This endpoint is for manual applications where you directly provide `cand_id` and `requirement_id`
+- Unlike the webhook API, this does not require a similarity score or matching_id
+- The tracking record will have `matching_id = NULL` and `similarity_score = NULL`
+- The unique constraint on `(cand_id, requirement_id)` prevents duplicate applications
 
 ## 📚 API Documentation
 

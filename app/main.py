@@ -22,6 +22,7 @@ from app.api.resume_intake.router import router as resume_intake_router
 from app.api.recommendations.router import router as recommendations_router
 from app.api.requirement_details.router import router as requirement_details_router
 from app.api.outreach_agent.router import router as outreach_agent_router
+from app.api.manual_apply.router import router as manual_apply_router
 
 
 @asynccontextmanager
@@ -146,8 +147,8 @@ def configure_cors(app: FastAPI, settings) -> None:
 
 app = FastAPI(
     title="AutoApply Candidate Sync API",
-    description="Unified FastAPI application for candidate synchronization, job application webhooks, resume processing, job recommendations, requirement details, and outreach notifications",
-    version="6.0.0",
+    description="Unified FastAPI application for candidate synchronization, job application webhooks, resume processing, job recommendations, requirement details, outreach notifications, and manual job applications",
+    version="6.1.0",
     lifespan=lifespan
 )
 
@@ -161,6 +162,7 @@ app.include_router(resume_intake_router)
 app.include_router(recommendations_router)
 app.include_router(requirement_details_router)
 app.include_router(outreach_agent_router)
+app.include_router(manual_apply_router)
 
 
 @app.get("/")
@@ -169,7 +171,7 @@ async def root():
     return {
         "status": "healthy",
         "service": "AutoApply Candidate Sync API",
-        "version": "6.0.0"
+        "version": "6.1.0"
     }
 
 
@@ -179,14 +181,15 @@ async def health_check():
     return {
         "status": "healthy",
         "service": "AutoApply Candidate Sync API",
-        "version": "6.0.0",
+        "version": "6.1.0",
         "endpoints": {
             "webhook": "/webhook/cand-job-matching",
             "candidate_sync": "/candidate-sync",
             "resume_intake": "/resume-intake/process-resume",
             "recommendations": "/api/recommendations",
             "requirement_details": "/api/requirement/{requirement_id}",
-            "outreach_agent": "/webhook/outreach/job-match"
+            "outreach_agent": "/webhook/outreach/job-match",
+            "manual_apply": "/apply-job"
         }
     }
 
