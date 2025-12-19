@@ -27,20 +27,17 @@ def get_supabase_client() -> Client:
     global _supabase_client
     if _supabase_client is None:
         settings = get_settings()
-        
-        # Use SUPABASE_KEY if available, otherwise fall back to SUPABASE_SERVICE_KEY
-        supabase_key = settings.supabase_key
-        if not supabase_key and settings.supabase_service_key:
-            supabase_key = settings.supabase_service_key
-        elif not supabase_key and settings.supabase_service_role_key:
-            supabase_key = settings.supabase_service_role_key
-        
-        if not supabase_key:
-            raise ValueError("❌ SUPABASE_KEY or SUPABASE_SERVICE_KEY must be set in .env file")
-        
+
+        # Use the unified Supabase service key configuration
+        service_key = settings.supabase_service_key
+        if not service_key and settings.supabase_service_role_key:
+            service_key = settings.supabase_service_role_key
+        if not service_key:
+            raise ValueError("❌ SUPABASE_SERVICE_KEY or SUPABASE_SERVICE_ROLE_KEY must be set in .env file")
+
         _supabase_client = create_client(
             settings.supabase_url,
-            supabase_key.get_secret_value() if hasattr(supabase_key, 'get_secret_value') else str(supabase_key)
+            service_key.get_secret_value()
         )
         logger.info("Supabase client initialized for Outreach Agent")
     

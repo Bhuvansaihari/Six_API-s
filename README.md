@@ -766,7 +766,6 @@ See `.env.example` for all available configuration options.
 
 **Required for Resume Intake API:**
 - `OPENAI_API_KEY` - OpenAI API key for GPT-4o and embeddings
-- `SUPABASE_KEY` - Supabase anon or service role key (for Resume Intake API)
 - `QDRANT_URL` - Qdrant vector database URL
 - `QDRANT_API_KEY` - Qdrant API key for authentication
 

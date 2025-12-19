@@ -36,18 +36,23 @@ def get_database_client() -> Client:
         return _client_instance
     
     settings = get_settings()
-    
+
     if not settings.supabase_url:
         raise ValueError("Supabase URL not configured. Please set SUPABASE_URL in .env file")
-    
-    if not settings.supabase_key:
-        raise ValueError("Supabase key not configured. Please set SUPABASE_KEY in .env file")
-    
+
+    # Use the same service key logic as the shared Supabase client:
+    # prefer SUPABASE_SERVICE_KEY, fall back to SUPABASE_SERVICE_ROLE_KEY
+    service_key = settings.supabase_service_key
+    if not service_key and settings.supabase_service_role_key:
+        service_key = settings.supabase_service_role_key
+    if not service_key:
+        raise ValueError("Supabase service key not configured. Please set SUPABASE_SERVICE_KEY in .env file")
+
     # Create client - httpx (used by Supabase) handles connection pooling automatically
     # Default pool limits: max_connections=100, max_keepalive_connections=20
     _client_instance = create_client(
         settings.supabase_url,
-        settings.supabase_key.get_secret_value()
+        service_key.get_secret_value()
     )
     
     return _client_instance
