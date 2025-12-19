@@ -82,6 +82,39 @@ class WebhookProcessingService:
                 }
             
             candidate = AutoApplyCand(**candidate_data)
+
+            # Remote preference filter
+            # Treat missing flag as False (no preference)
+            is_remote_preferred = bool(candidate_data.get("is_remote_preferred") or False)
+
+            if is_remote_preferred:
+                # Get job's is_remote_location flag from parsed_requirements (async with retry)
+                is_remote_location = await retry_with_backoff(
+                    asyncio.to_thread,
+                    self.supabase.get_requirement_remote_flag,
+                    matching.requirement_id,
+                    max_retries=settings.retry_max_attempts,
+                    initial_delay=settings.retry_initial_delay,
+                    max_delay=settings.retry_max_delay,
+                    exponential_base=settings.retry_exponential_base,
+                )
+
+                # Rule:
+                # - True  -> job is remote, proceed
+                # - False -> explicitly non-remote, skip
+                # - None  -> no info, proceed
+                if is_remote_location is False:
+                    logger.info(
+                        f"Skipping apply for cand_id={matching.cand_id}, requirement_id={matching.requirement_id} "
+                        f"because candidate prefers remote but job is not remote."
+                    )
+                    return {
+                        "success": False,
+                        "message": "Candidate prefers remote but job is not remote. Skipping application.",
+                        "cand_id": matching.cand_id,
+                        "requirement_id": matching.requirement_id,
+                        "similarity_score": matching.similarity_score,
+                    }
             
             # Prepare stored procedure parameters
             sp_params = {

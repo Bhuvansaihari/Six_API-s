@@ -31,7 +31,7 @@ class SupabaseClient:
         """Fetch candidate data from auto_apply_cand table"""
         try:
             response = self.client.table("auto_apply_cand").select(
-                "cand_id, disability_id, veteran_disclosure_id, ethnicity_id, race_id, gender_id"
+                "cand_id, disability_id, veteran_disclosure_id, ethnicity_id, race_id, gender_id, is_remote_preferred"
             ).eq("cand_id", cand_id).execute()
             
             if response.data and len(response.data) > 0:
@@ -39,6 +39,37 @@ class SupabaseClient:
             return None
         except Exception as e:
             logger.error(f"Error fetching candidate data for cand_id {cand_id}: {str(e)}")
+            raise
+    
+    def get_requirement_remote_flag(self, requirement_id: str) -> Optional[bool]:
+        """
+        Return is_remote_location flag for a requirement from parsed_requirements.
+
+        Returns:
+            True  -> job is remote
+            False -> job is explicitly non-remote
+            None  -> no row found or flag is NULL (no info)
+        """
+        try:
+            response = (
+                self.client.table("parsed_requirements")
+                .select("requirement_id, is_remote_location")
+                .eq("requirement_id", requirement_id)
+                .limit(1)
+                .execute()
+            )
+
+            if not response.data or len(response.data) == 0:
+                return None
+
+            value = response.data[0].get("is_remote_location")
+            if value is None:
+                return None
+            return bool(value)
+        except Exception as e:
+            logger.error(
+                f"Error fetching is_remote_location for requirement_id {requirement_id}: {str(e)}"
+            )
             raise
     
     def insert_application_tracking(

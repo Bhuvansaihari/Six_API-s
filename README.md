@@ -325,6 +325,21 @@ The API will be available at: `http://localhost:8000`
 
 - `POST /webhook/cand-job-matching` - Receives Supabase webhook events
 
+**Description:**
+This endpoint processes webhook events from Supabase when a new job-candidate match is created. It performs the following checks before applying:
+
+1. Validates webhook event (must be INSERT on `cand_job_matching` table)
+2. Checks if `similarity_score >= 0.7` (threshold check)
+3. Fetches candidate data from `auto_apply_cand` table
+4. **Remote Preference Filter:** 
+   - If candidate has `is_remote_preferred = true`:
+     - Checks if job has `is_remote_location = true` in `parsed_requirements` table
+     - If job is explicitly non-remote (`is_remote_location = false`), skips application
+     - If job is remote or flag is NULL/missing, proceeds with application
+   - If candidate has `is_remote_preferred = false` or missing, proceeds directly (no remote check)
+5. Executes `Usp_SC_JobSeeker_IU_ApplyJob` stored procedure
+6. Creates tracking record in `job_application_tracking` table
+
 **Request Body:**
 ```json
 {
@@ -357,9 +372,49 @@ The API will be available at: `http://localhost:8000`
 }
 ```
 
+**Response (Skipped - Remote Preference Mismatch):**
+```json
+{
+  "success": false,
+  "message": "Candidate prefers remote but job is not remote. Skipping application.",
+  "cand_id": 2928,
+  "requirement_id": "1001",
+  "similarity_score": 0.85
+}
+```
+
+**Response (Skipped - Low Similarity Score):**
+```json
+{
+  "success": false,
+  "message": "Similarity score 0.65 is below threshold 0.7. Skipping stored procedure execution.",
+  "similarity_score": 0.65
+}
+```
+
+**Note:**
+- Similarity score threshold: `>= 0.7` required to proceed
+- Remote preference filtering: Only applies when candidate explicitly prefers remote (`is_remote_preferred = true`)
+- Missing flags: If `is_remote_preferred` is missing/NULL, treated as `false` (no preference)
+- Job remote flag: If `is_remote_location` is NULL/missing, application proceeds (no restriction)
+- All skipped events return HTTP 200 to acknowledge webhook receipt
+
 ### Candidate Sync API
 
 - `POST /candidate-sync` - Synchronizes a candidate from SQL Server to Supabase
+
+**Description:**
+This endpoint synchronizes candidate data from SQL Server to Supabase. It performs the following steps:
+
+1. Receives candidate email in request body
+2. Queries SQL Server `CandidateMaster` table to find candidate by email
+3. Validates results:
+   - If no candidate found → returns 404
+   - If multiple candidates found → returns 409 (conflict)
+   - If exactly one candidate found → proceeds
+4. Serializes candidate data (ID, name, email, phone, address, etc.)
+5. Upserts candidate into Supabase `auto_apply_cand` table (upsert based on email unique constraint)
+6. Returns synchronized candidate data
 
 **Request Body:**
 ```json
@@ -378,6 +433,11 @@ The API will be available at: `http://localhost:8000`
     "first_name": "John",
     "last_name": "Doe",
     "email": "candidate@example.com",
+    "mobile": "+1234567890",
+    "home": "+1234567891",
+    "work": "+1234567892",
+    "relocation": false,
+    "over_18_age": true,
     ...
   }
 }
@@ -396,6 +456,12 @@ The API will be available at: `http://localhost:8000`
   "detail": "Found multiple accounts with your email please contact the support team."
 }
 ```
+
+**Note:**
+- Uses SQL Server connection pool for efficient database access
+- Upsert operation ensures idempotency (can be called multiple times safely)
+- Candidate ID from SQL Server is preserved in Supabase (`cand_id` field)
+- All phone numbers, addresses, and personal information are synchronized
 
 ### Resume Intake API
 
@@ -436,13 +502,46 @@ curl -X POST "http://localhost:8000/resume-intake/process-resume?candidate_id=12
 ```
 
 **Processing Pipeline:**
-1. Extract text from resume file (PDF/DOCX/TXT)
-2. Structure data using GPT-4o (extracts personal info, experience, education, skills, etc.)
-3. Update records in Supabase:
-   - Updates `auto_apply_cand` table with candidate profile and resume metadata
-   - Upserts `parsed_cand_resume` table with structured resume data
-4. Generate vector embeddings using OpenAI (text-embedding-3-large)
-5. Store embeddings in Qdrant vector database for semantic search
+1. **File Upload & Validation:**
+   - Receives resume file (PDF/DOCX/TXT)
+   - Validates file type and size
+   - Generates file hash for cache key
+   - Checks cache using `(file_hash, candidate_id)` key
+
+2. **Text Extraction:**
+   - If cache miss, extracts text from resume file:
+     - PDF: Uses PyPDF2 or pdfplumber
+     - DOCX: Uses python-docx
+     - TXT: Reads directly
+
+3. **Data Structuring (GPT-4o):**
+   - Sends extracted text to GPT-4o with structured prompt
+   - Extracts: personal info, professional experience, education, skills, certifications, projects
+   - Returns structured JSON with snake_case keys
+
+4. **Database Updates (Supabase):**
+   - Updates `auto_apply_cand` table:
+     - Personal information (name, email, phone, location)
+     - Resume metadata (file name, size, type, upload date)
+     - Experience years calculated from employment dates
+   - Upserts `parsed_cand_resume` table:
+     - Full structured JSON data
+     - Resume text content
+     - Skills arrays (technical, soft, languages)
+     - Education, certifications, projects as JSONB
+
+5. **Vector Embeddings:**
+   - Generates embeddings using OpenAI `text-embedding-3-large` model
+   - Creates embedding vector (1536 dimensions)
+
+6. **Vector Storage (Qdrant):**
+   - Stores embedding in Qdrant vector database
+   - Associates with candidate_id for semantic search
+   - Enables similarity-based job matching
+
+7. **Cache Result:**
+   - Caches processed result for 1 hour
+   - Prevents reprocessing same file for same candidate
 
 **Additional Endpoints:**
 - `GET /resume-intake/cache/stats` - Get cache statistics
@@ -455,6 +554,20 @@ curl -X POST "http://localhost:8000/resume-intake/process-resume?candidate_id=12
 ### Get Recommendations API
 
 - `GET /api/recommendations?candidate_id={id}&use_cache={true|false}` - Get job recommendations for a candidate
+
+**Description:**
+This endpoint retrieves job recommendations for a candidate using SQL Server stored procedures. It performs the following steps:
+
+1. Validates `candidate_id` parameter (must be > 0)
+2. Checks cache using `candidate_id` as key (if `use_cache=true`)
+3. If cache hit, returns cached recommendations immediately
+4. If cache miss:
+   - Acquires database connection from pool
+   - Executes stored procedure `USP_SC_Get_JobSeekerRecommenededJobList` with candidate_id
+   - Processes results and formats response
+   - Caches results with TTL (default: 5 minutes)
+   - Returns recommendations
+5. Applies rate limiting (default: 60 requests/minute per IP)
 
 **Query Parameters:**
 - `candidate_id` (required, int): The candidate ID to get recommendations for (must be > 0)
@@ -486,16 +599,39 @@ curl -X POST "http://localhost:8000/resume-intake/process-resume?candidate_id=12
 - `GET /api/recommendations/cache/stats` - Get cache statistics
 - `DELETE /api/recommendations/cache/clear` - Clear all cached entries
 
+**Process Flow:**
+```
+Request → Validate candidate_id → Check Cache → [If miss] Get DB Connection → Execute SP → Cache Result → Return
+```
+
 **Note:**
 - Executes stored procedure `USP_SC_Get_JobSeekerRecommenededJobList`
 - Rate limited (configurable, default: 60 requests per minute per IP)
 - Results are cached with TTL (default: 5 minutes)
 - Supports both in-memory and Redis caching
 - Includes retry logic with exponential backoff for database operations
+- Uses connection pooling for efficient database access
 
 ### Get Requirement Details API
 
 - `GET /api/requirement/{requirement_id}?company_id=1` - Get requirement details by ID
+
+**Description:**
+This endpoint fetches detailed information about a job requirement by ID. It performs the following steps:
+
+1. Validates `requirement_id` path parameter (must be > 0)
+2. Validates `company_id` query parameter (default: 1, must be > 0)
+3. Generates cache key from `requirement_id` and `company_id`
+4. Checks cache for existing result
+5. If cache hit, returns cached requirement details immediately
+6. If cache miss:
+   - Acquires database connection from async pool
+   - Executes stored procedure `Beta_usp_Get_Requirement_Details` with requirement_id and company_id
+   - Maps database column names to API response keys
+   - Caches result with TTL (default: 5 minutes = 300 seconds)
+   - Returns requirement details
+7. If requirement not found, returns 404
+8. Applies rate limiting (default: 100 requests/minute per IP)
 
 **Path Parameters:**
 - `requirement_id` (required, int): The requirement ID to fetch (must be > 0)
@@ -526,6 +662,11 @@ curl -X POST "http://localhost:8000/resume-intake/process-resume?candidate_id=12
 }
 ```
 
+**Process Flow:**
+```
+Request → Validate Parameters → Generate Cache Key → Check Cache → [If miss] Get DB Connection → Execute SP → Map Fields → Cache Result → Return
+```
+
 **Response Field Mapping:**
 
 | Database Column | API Response Key |
@@ -546,6 +687,7 @@ curl -X POST "http://localhost:8000/resume-intake/process-resume?candidate_id=12
 - Rate limited (configurable, default: 100 requests per minute per IP)
 - Results are cached with TTL (default: 5 minutes = 300 seconds)
 - Uses async database connection pooling
+- Cache key includes both requirement_id and company_id for proper isolation
 
 ### Outreach Agent V1 API
 
@@ -554,10 +696,38 @@ Sends email (SendGrid) and SMS (Twilio) notifications to candidates when they're
 **Endpoint:** `POST /webhook/outreach/job-match`
 
 **Description:**
-- Receives webhook events from Supabase when a new job application is created
-- Sends email and/or SMS notifications based on candidate preferences (`notify_email`, `notify_sms`)
-- Marks notifications as sent in the `job_application_tracking` table
-- Uses async concurrency control with configurable semaphore
+This endpoint processes webhook events from Supabase when a new job application is created in `job_application_tracking`. It performs the following steps:
+
+1. Receives webhook payload with `cand_id` and `requirement_id`
+2. Validates webhook secret (if configured)
+3. Validates payload structure (type=INSERT, table=job_application_tracking)
+4. Queues notification processing task asynchronously (returns 202 Accepted immediately)
+5. **Background Processing (async):**
+   - Acquires semaphore slot (concurrency control)
+   - Calls Supabase RPC function `get_application_details` to fetch:
+     - Candidate information (name, email, phone, notification preferences)
+     - Requirement details (title, description, location, company, similarity score)
+     - Application status and notification flags
+   - Checks if notifications already sent (`email_sent`, `sms_sent` flags)
+   - **Email Notification (if enabled):**
+     - Checks `notify_email` preference (default: true)
+     - If enabled and not sent:
+       - Renders HTML email template with job details
+       - Sends email via SendGrid
+       - Marks `email_sent = true` and records `email_sent_at` timestamp
+   - **SMS Notification (if enabled):**
+     - Checks `notify_sms` preference (default: false)
+     - If enabled and not sent:
+       - Formats phone number (E.164 format)
+       - Validates phone number
+       - Sends SMS via Twilio (160 character limit)
+       - Marks `sms_sent = true` and records `sms_sent_at` timestamp
+   - Releases semaphore slot
+
+**Process Flow:**
+```
+Webhook → Validate Secret → Queue Task → [Async] Fetch Details → Check Preferences → Send Email/SMS → Mark Sent → Release Semaphore
+```
 
 **Request Headers:**
 ```
@@ -626,6 +796,22 @@ Content-Type: application/json
 
 - `POST /apply-job` - Manually applies a candidate to a job requirement
 
+**Description:**
+This endpoint allows manual job applications without requiring a webhook event or similarity score. It performs the following steps:
+
+1. Receives `cand_id` and `requirement_id` in request body
+2. Fetches candidate data from Supabase `auto_apply_cand` table (with retry logic)
+3. Validates candidate exists (returns 400 if not found)
+4. Extracts candidate demographic data (disability_id, veteran_disclosure_id, ethnicity_id, race_id, gender_id)
+5. Prepares stored procedure parameters for `Usp_SC_JobSeeker_IU_ApplyJob`
+6. Executes stored procedure in SQL Server (with retry logic and exponential backoff)
+7. Creates tracking record in Supabase `job_application_tracking` table:
+   - Sets `matching_id = NULL` (no matching record)
+   - Sets `similarity_score = NULL` (no similarity calculation)
+   - Sets `application_status = "MATCHED"`
+   - Records `applied_at` timestamp
+8. Returns success response with `selection_id` and `application_id`
+
 **Request Body:**
 ```json
 {
@@ -653,6 +839,18 @@ Content-Type: application/json
 }
 ```
 
+**Response (Error - 500):**
+```json
+{
+  "detail": "Internal server error: [error message]"
+}
+```
+
+**Process Flow:**
+```
+Request → Validate Input → Fetch Candidate Data → Prepare SP Params → Execute SP → Create Tracking Record → Return Success
+```
+
 **Features:**
 - ✅ Direct application without webhook or similarity score requirement
 - ✅ Fetches candidate data from Supabase `auto_apply_cand` table
@@ -660,12 +858,15 @@ Content-Type: application/json
 - ✅ Creates tracking record in `job_application_tracking` table
 - ✅ Tracking record has NULL `matching_id` and `similarity_score` (manual application)
 - ✅ Uses same retry logic and error handling as webhook API
+- ✅ Handles tracking record creation failures gracefully (logs error but doesn't fail if SP succeeded)
 
 **Note:**
 - This endpoint is for manual applications where you directly provide `cand_id` and `requirement_id`
 - Unlike the webhook API, this does not require a similarity score or matching_id
+- Unlike the webhook API, this does not check remote preference filters
 - The tracking record will have `matching_id = NULL` and `similarity_score = NULL`
 - The unique constraint on `(cand_id, requirement_id)` prevents duplicate applications
+- If tracking record creation fails, the stored procedure execution is still considered successful
 
 ## 📚 API Documentation
 
@@ -679,57 +880,98 @@ Content-Type: application/json
 ### How It Works
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    app/main.py                          │
-│  - Unified FastAPI Application                         │
-│  - Lifespan Manager (startup/shutdown)                  │
-│  - Includes all routers                                 │
-└─────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                         app/main.py                                │
+│  - Unified FastAPI Application                                     │
+│  - Lifespan Manager (startup/shutdown)                              │
+│  - Includes all 7 API routers                                      │
+│  - Initializes: caches, rate limiters, DB pools, semaphores         │
+└─────────────────────────────────────────────────────────────────────┘
                         │
-        ┌───────────────┴───────────────┬───────────────┐
-        │                               │               │
-┌───────▼────────┐            ┌─────────▼──────────┐   │
-│ Apply Webhook  │            │ Candidate Sync     │   │
-│ API Router     │            │ API Router         │   │
-│ /webhook/*     │            │ /candidate-sync/*  │   │
-└───────┬────────┘            └─────────┬──────────┘   │
-        │                               │               │
-        │                               │      ┌────────▼──────────┐
-┌───────▼────────┐            ┌─────────▼──────│ Resume Intake     │
-│ Webhook        │            │ sync_candidate │ API Router        │
-│ Processing     │            │ _by_email      │ /resume-intake/*  │
-│ Service        │            │                └─────────┬─────────┘
-└───────┬────────┘            └─────────┬──────────┘       │
-        │                               │                  │
-        │                               │      ┌───────────▼──────────┐
-        │                               │      │ Resume Processing    │
-        │                               │      │ Pipeline             │
-        │                               │      │ - Parse              │
-        │                               │      │ - Structure (GPT-4o) │
-        │                               │      │ - Store (Supabase)   │
-        │                               │      │ - Embed (OpenAI)     │
-        │                               │      │ - Vector (Qdrant)    │
-        │                               │      └───────────┬──────────┘
-        │                               │                  │
-┌───────▼──────────┬───────────────────▼──────────┬───────▼──────────┐
-│  Shared Layers                                  │                  │
-│  - app/db/sql_server.py                         │                  │
-│  - app/supabase/client.py                       │                  │
-│  - app/services/resume_intake/                  │                  │
-│  - app/utils/retry_utils.py                     │                  │
-│  - app/utils/logger.py                          │                  │
-└─────────────────────────────────────────────────┴──────────────────┘
-        │                               │                  │
-        │                               │                  │
-┌───────▼──────────┐          ┌─────────▼──────────┐      │
-│ SQL Server       │          │ Supabase           │      │
-│ Database         │          │ Database           │      │
-└──────────────────┘          └────────────────────┘      │
-                                                           │
-                                                  ┌────────▼──────────┐
-                                                  │ Qdrant            │
-                                                  │ Vector Database   │
-                                                  └───────────────────┘
+        ┌───────────────┴───────────────┬───────────────┬──────────────┐
+        │                               │               │              │
+┌───────▼────────┐      ┌───────────────▼──────────┐   │              │
+│ Apply Webhook  │      │ Candidate Sync           │   │              │
+│ /webhook/      │      │ /candidate-sync          │   │              │
+│ cand-job-      │      │                          │   │              │
+│ matching       │      │                          │   │              │
+└───────┬────────┘      └───────────────┬──────────┘   │              │
+        │                               │               │              │
+┌───────▼────────┐      ┌───────────────▼──────────┐   │              │
+│ Webhook       │      │ SQL Server Query         │   │              │
+│ Processing    │      │ → Supabase Upsert        │   │              │
+│ - Validate    │      │                          │   │              │
+│ - Remote Check│      │                          │   │              │
+│ - Execute SP  │      │                          │   │              │
+│ - Track       │      │                          │   │              │
+└───────┬────────┘      └───────────────┬──────────┘   │              │
+        │                               │               │              │
+        │      ┌─────────────────────────▼──────────────┼──────────────┐
+        │      │                                         │              │
+┌───────▼──────▼────────┐      ┌────────────────────────▼──────────┐  │
+│ Resume Intake          │      │ Recommendations                   │  │
+│ /resume-intake/        │      │ /api/recommendations              │  │
+│ process-resume         │      │                                   │  │
+└───────┬───────────────┘      └───────────────┬───────────────────┘  │
+        │                                      │                      │
+┌───────▼───────────────┐      ┌───────────────▼───────────────────┐  │
+│ Resume Processing      │      │ Requirement Details              │  │
+│ - Parse (PDF/DOCX/TXT) │      │ /api/requirement/{id}            │  │
+│ - Structure (GPT-4o)  │      │                                   │  │
+│ - Store (Supabase)     │      │                                   │  │
+│ - Embed (OpenAI)       │      │                                   │  │
+│ - Vector (Qdrant)      │      │                                   │  │
+└───────┬───────────────┘      └───────────────┬───────────────────┘  │
+        │                                      │                      │
+        │      ┌───────────────────────────────▼──────────────────────┐
+        │      │                                                      │
+┌───────▼──────▼────────┐      ┌─────────────────────────────────────▼──┐
+│ Outreach Agent        │      │ Manual Apply                          │
+│ /webhook/outreach/     │      │ /apply-job                            │
+│ job-match              │      │                                       │
+└───────┬───────────────┘      └───────────────┬───────────────────────┘
+        │                                      │
+┌───────▼───────────────┐      ┌───────────────▼───────────────────────┐
+│ Notification          │      │ Manual Application                    │
+│ Processing            │      │ - Fetch Candidate                    │
+│ - Fetch Details       │      │ - Execute SP                         │
+│ - Send Email (SendGrid)│     │ - Create Tracking                   │
+│ - Send SMS (Twilio)   │      │                                       │
+│ - Mark Sent           │      │                                       │
+└───────┬───────────────┘      └───────────────┬───────────────────────┘
+        │                                      │
+        │                                      │
+┌───────▼──────────────────────────────────────▼───────────────────────┐
+│                          Shared Layers                                 │
+│  - app/db/sql_server.py (SQL Server connections & SP execution)       │
+│  - app/supabase/client.py (Supabase operations & RPC calls)            │
+│  - app/services/*/ (Service-specific logic)                            │
+│  - app/utils/retry_utils.py (Retry with exponential backoff)          │
+│  - app/utils/logger.py (Unified logging)                               │
+└───────────────────────────────────────────────────────────────────────┘
+        │                                      │
+        │                                      │
+┌───────▼──────────┐          ┌────────────────▼──────────┐
+│ SQL Server       │          │ Supabase                 │
+│ - HealthWorks    │          │ - auto_apply_cand        │
+│ - TalentArbor    │          │ - parsed_cand_resume     │
+│ - Stored Procs   │          │ - job_application_tracking│
+└──────────────────┘          │ - parsed_requirements   │
+                              │ - cand_job_matching     │
+                              └─────────────────────────┘
+                                      │
+                              ┌───────▼──────────┐
+                              │ Qdrant           │
+                              │ Vector Database  │
+                              │ (Embeddings)     │
+                              └──────────────────┘
+                                      │
+                              ┌───────▼──────────┐
+                              │ External APIs    │
+                              │ - SendGrid (Email)│
+                              │ - Twilio (SMS)   │
+                              │ - OpenAI (GPT-4o)│
+                              └──────────────────┘
 ```
 
 ### Data Flow
@@ -751,6 +993,26 @@ Resume File → ResumeParser → GPT-4o (Structure) → DatabaseService → Supa
                                               EmbeddingService → OpenAI → Qdrant
 ```
 
+**4. Get Recommendations Flow:**
+```
+Request → Validate candidate_id → Check Cache → [If miss] Execute SP → Cache Result → Return Recommendations
+```
+
+**5. Get Requirement Details Flow:**
+```
+Request → Validate requirement_id → Check Cache → [If miss] Execute SP → Cache Result → Return Details
+```
+
+**6. Outreach Agent Flow:**
+```
+Supabase Webhook → Validate → Queue Task → [Async] Fetch Details → Check Preferences → Send Email/SMS → Mark Sent
+```
+
+**7. Manual Apply Flow:**
+```
+Request → Fetch Candidate Data → Prepare SP Params → Execute SP → Create Tracking Record → Return Success
+```
+
 ---
 
 ## ⚙️ Configuration
@@ -761,8 +1023,8 @@ See `.env.example` for all available configuration options.
 
 **Required:**
 - `SUPABASE_URL` - Supabase project URL
-- `SUPABASE_SERVICE_KEY` or `SUPABASE_SERVICE_ROLE_KEY` - Service role key (for Apply Webhook and Candidate Sync)
-- `SQLSERVER_CONNECTION_STRING` OR individual `SQL_SERVER_*` parameters (for Apply Webhook and Candidate Sync)
+- `SUPABASE_SERVICE_KEY` or `SUPABASE_SERVICE_ROLE_KEY` - Service role key (for Apply Webhook, Candidate Sync, Manual Apply, and Outreach Agent)
+- `SQLSERVER_CONNECTION_STRING` OR individual `SQL_SERVER_*` parameters (for Apply Webhook, Candidate Sync, and Manual Apply)
 
 **Required for Resume Intake API:**
 - `OPENAI_API_KEY` - OpenAI API key for GPT-4o and embeddings
@@ -787,6 +1049,10 @@ See `.env.example` for all available configuration options.
 - `TWILIO_ACCOUNT_SID` - Twilio account SID
 - `TWILIO_AUTH_TOKEN` - Twilio authentication token
 - `TWILIO_PHONE_NUMBER` - Twilio phone number (E.164 format, e.g., +1234567890)
+
+**Required for Manual Apply API:**
+- Uses same SQL Server configuration as Apply Webhook API (`SQL_SERVER_*` parameters)
+- Uses same Supabase configuration as Apply Webhook API (`SUPABASE_SERVICE_KEY`)
 
 **Optional for Outreach Agent V1 API:**
 - `SENDGRID_REPLY_TO_EMAIL` - Reply-to email address (defaults to `SENDGRID_FROM_EMAIL`)
@@ -965,4 +1231,4 @@ For issues and questions, please create an issue or contact the development team
 - **Code Reuse**: Shared database, Supabase, and utility modules
 - **Unified Configuration**: Single `.env` file for all APIs
 - **Single Deployment**: One FastAPI app, one port, unified infrastructure
-- **APIs Merged**: 5 APIs (Apply Webhook, Candidate Sync, Resume Intake, Get Recommendations, Get Requirement Details)
+- **APIs Merged**: 7 APIs (Apply Webhook, Candidate Sync, Resume Intake, Get Recommendations, Get Requirement Details, Outreach Agent V1, Manual Apply)
