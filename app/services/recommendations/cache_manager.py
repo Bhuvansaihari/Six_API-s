@@ -104,6 +104,75 @@ class CacheManager:
         
         return len(expired_keys)
     
+    def _generate_list_key(self, candidate_id: int) -> str:
+        """Generate a cache key for list endpoint."""
+        return f"recommendations:list:{candidate_id}"
+
+    def _generate_details_key(self, requirement_id: int, source_id: int) -> str:
+        """Generate a cache key for details endpoint."""
+        return f"recommendations:details:{requirement_id}:{source_id}"
+
+    def get_list(self, candidate_id: int) -> Optional[Any]:
+        """Retrieve list results from the cache if it exists and hasn't expired."""
+        key = self._generate_list_key(candidate_id)
+        
+        if key not in self._cache:
+            logger.debug(f"Cache miss for list key: {key}")
+            return None
+        
+        value, expiration_time = self._cache[key]
+        
+        if time.time() > expiration_time:
+            del self._cache[key]
+            logger.debug(f"Cache entry expired and removed: {key}")
+            return None
+        
+        logger.debug(f"Cache hit for list key: {key}")
+        return value
+
+    def set_list(
+        self,
+        candidate_id: int,
+        value: Any,
+        ttl: Optional[int] = None
+    ) -> None:
+        """Store list results in the cache with an expiration time."""
+        key = self._generate_list_key(candidate_id)
+        expiration_time = time.time() + (ttl or self.default_ttl)
+        self._cache[key] = (value, expiration_time)
+        logger.debug(f"List value cached with key: {key}, expires in {ttl or self.default_ttl}s")
+
+    def get_details(self, requirement_id: int, source_id: int) -> Optional[Any]:
+        """Retrieve details from the cache if it exists and hasn't expired."""
+        key = self._generate_details_key(requirement_id, source_id)
+        
+        if key not in self._cache:
+            logger.debug(f"Cache miss for details key: {key}")
+            return None
+        
+        value, expiration_time = self._cache[key]
+        
+        if time.time() > expiration_time:
+            del self._cache[key]
+            logger.debug(f"Cache entry expired and removed: {key}")
+            return None
+        
+        logger.debug(f"Cache hit for details key: {key}")
+        return value
+
+    def set_details(
+        self,
+        requirement_id: int,
+        source_id: int,
+        value: Any,
+        ttl: Optional[int] = None
+    ) -> None:
+        """Store details in the cache with an expiration time."""
+        key = self._generate_details_key(requirement_id, source_id)
+        expiration_time = time.time() + (ttl or self.default_ttl)
+        self._cache[key] = (value, expiration_time)
+        logger.debug(f"Details value cached with key: {key}, expires in {ttl or self.default_ttl}s")
+
     def get_stats(self) -> Dict[str, Any]:
         """Get cache statistics."""
         current_time = time.time()
@@ -218,6 +287,91 @@ class RedisCacheManager:
         except redis.RedisError as e:
             logger.error(f"Redis error during clear operation: {e}")
     
+    def _generate_list_key(self, candidate_id: int) -> str:
+        """Generate a cache key for list endpoint."""
+        return f"recommendations:list:{candidate_id}"
+
+    def _generate_details_key(self, requirement_id: int, source_id: int) -> str:
+        """Generate a cache key for details endpoint."""
+        return f"recommendations:details:{requirement_id}:{source_id}"
+
+    def get_list(self, candidate_id: int) -> Optional[Any]:
+        """Retrieve list results from Redis cache."""
+        try:
+            key = self._generate_list_key(candidate_id)
+            cached_value = self.redis_client.get(key)
+            
+            if cached_value is None:
+                logger.debug(f"Cache miss for list key: {key}")
+                return None
+            
+            logger.debug(f"Cache hit for list key: {key}")
+            return json.loads(cached_value)
+        except redis.RedisError as e:
+            logger.warning(f"Redis error during get_list operation: {e}")
+            return None
+        except (json.JSONDecodeError, Exception) as e:
+            logger.error(f"Error deserializing cached value: {e}")
+            return None
+
+    def set_list(
+        self,
+        candidate_id: int,
+        value: Any,
+        ttl: Optional[int] = None
+    ) -> None:
+        """Store list results in Redis cache with TTL."""
+        try:
+            key = self._generate_list_key(candidate_id)
+            serialized_value = json.dumps(value)
+            ttl_seconds = ttl or self.default_ttl
+            
+            self.redis_client.setex(key, ttl_seconds, serialized_value)
+            logger.debug(f"List value cached in Redis with key: {key}, expires in {ttl_seconds}s")
+        except redis.RedisError as e:
+            logger.warning(f"Redis error during set_list operation: {e}")
+        except (TypeError, ValueError) as e:
+            logger.error(f"Error serializing value for cache: {e}")
+
+    def get_details(self, requirement_id: int, source_id: int) -> Optional[Any]:
+        """Retrieve details from Redis cache."""
+        try:
+            key = self._generate_details_key(requirement_id, source_id)
+            cached_value = self.redis_client.get(key)
+            
+            if cached_value is None:
+                logger.debug(f"Cache miss for details key: {key}")
+                return None
+            
+            logger.debug(f"Cache hit for details key: {key}")
+            return json.loads(cached_value)
+        except redis.RedisError as e:
+            logger.warning(f"Redis error during get_details operation: {e}")
+            return None
+        except (json.JSONDecodeError, Exception) as e:
+            logger.error(f"Error deserializing cached value: {e}")
+            return None
+
+    def set_details(
+        self,
+        requirement_id: int,
+        source_id: int,
+        value: Any,
+        ttl: Optional[int] = None
+    ) -> None:
+        """Store details in Redis cache with TTL."""
+        try:
+            key = self._generate_details_key(requirement_id, source_id)
+            serialized_value = json.dumps(value)
+            ttl_seconds = ttl or self.default_ttl
+            
+            self.redis_client.setex(key, ttl_seconds, serialized_value)
+            logger.debug(f"Details value cached in Redis with key: {key}, expires in {ttl_seconds}s")
+        except redis.RedisError as e:
+            logger.warning(f"Redis error during set_details operation: {e}")
+        except (TypeError, ValueError) as e:
+            logger.error(f"Error serializing value for cache: {e}")
+
     def get_stats(self) -> Dict[str, Any]:
         """Get cache statistics from Redis."""
         try:

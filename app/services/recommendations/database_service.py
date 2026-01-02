@@ -50,20 +50,46 @@ def _convert_row_to_dict(cursor: pyodbc.Cursor, row: pyodbc.Row) -> Dict[str, An
     return {key: _serialize_value(value) for key, value in row_dict.items()}
 
 
-def _map_result_keys(result: Dict[str, Any]) -> Dict[str, Any]:
+def _map_list_result_keys(result: Dict[str, Any]) -> Dict[str, Any]:
     """
-    Map stored procedure result keys to clean API response keys.
-    Only returns the fields specified in the key mapping.
+    Map stored procedure result keys to clean API response keys for list endpoint.
     """
     key_mapping = {
-        "JobTitleText": "Jobtitle",
-        "RequirementJobDescription": "JobDescription",
-        "RequirementDuration": "Duration",
-        "CategoryName": "Category",
-        "JobTypeText": "JobType",
-        "RemoteOptionType": "Remote/On-site",
-        "ClientName": "Client",
-        "Location": "Location"
+        "RequirementID": "requirement_id",
+        "JobTitleText": "job_title",
+        "Location": "location",
+        "SourceID": "source_id"
+    }
+    
+    mapped_result = {}
+    for key, value in result.items():
+        if key in key_mapping:
+            mapped_key = key_mapping[key]
+            mapped_result[mapped_key] = value
+    
+    return mapped_result
+
+
+def _map_details_result_keys(result: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Map stored procedure result keys to clean API response keys for details endpoint.
+    """
+    key_mapping = {
+        "JobTitleText": "job_title",
+        "RequirementJobDescription": "job_description",
+        "CategoryName": "category",
+        "JobTypeText": "job_type",
+        "RemoteOptionType": "remote_option",
+        "RequirementID": "requirement_id",
+        "DepartmentName": "department",
+        "ClientName": "client_name",
+        "Location": "location",
+        "CityName": "city",
+        "StateShortName": "state",
+        "PayRateToCandidate": "pay_rate_to_candidate",
+        "BillRateFromClient": "bill_rate_from_client",
+        "CreatedDate": "created_date",
+        "ClientID": "client_id"
     }
     
     mapped_result = {}
@@ -124,26 +150,22 @@ def _is_retryable_error(exception: Exception) -> bool:
     return False
 
 
-async def execute_stored_procedure(
-    candidate_id: int,
-    page_no: int = 1,
-    page_size: int = 10,
-    job_activity_type_id: int = 0
-) -> List[Dict[str, Any]]:
+async def execute_list_stored_procedure(
+    candidate_id: int
+) -> tuple[List[Dict[str, Any]], Optional[int]]:
     """
-    Execute the USP_SC_Get_JobSeekerRecommenededJobList stored procedure.
+    Execute the USP_AI_Get_JobSeekerRecommenededJobList stored procedure.
     
     This function executes the stored procedure asynchronously with retry logic
-    for transient failures and returns the results with clean key names mapped
-    according to the API specification.
+    for transient failures and returns the results with clean key names.
+    
+    Returns:
+        tuple: (mapped_results, total_count)
     """
     if not candidate_id or candidate_id <= 0:
         raise ValueError("candidate_id must be a positive integer")
     
-    logger.info(
-        f"Executing stored procedure for candidate_id={candidate_id}, "
-        f"page_no={page_no}, page_size={page_size}, job_activity_type_id={job_activity_type_id}"
-    )
+    logger.info(f"Executing list stored procedure for candidate_id={candidate_id}")
     
     settings = get_settings()
     db_pool = get_db_pool()
@@ -166,13 +188,10 @@ async def execute_stored_procedure(
                     
                     cursor.execute(
                         """
-                        EXEC [dbo].[USP_SC_Get_JobSeekerRecommenededJobList]
-                            @PageNo = ?,
-                            @PageSize = ?,
-                            @CandidateID = ?,
-                            @JobActivityTypeID = ?
+                        EXEC [dbo].[USP_AI_Get_JobSeekerRecommenededJobList]
+                            @CandidateID = ?
                         """,
-                        (page_no, page_size, candidate_id, job_activity_type_id)
+                        (candidate_id,)
                     )
                     
                     results = []
@@ -187,7 +206,7 @@ async def execute_stored_procedure(
                             break
                     
                     cursor.close()
-                    logger.info(f"Stored procedure executed successfully. Returned {len(results)} records")
+                    logger.info(f"List stored procedure executed successfully. Returned {len(results)} records")
                     return results
                     
                 except pyodbc.OperationalError as e:
@@ -221,8 +240,20 @@ async def execute_stored_procedure(
     
     try:
         results = await _execute_with_retry()
-        mapped_results = [_map_result_keys(result) for result in results]
-        return mapped_results
+        
+        # Extract total_count from first record before mapping
+        total_count = None
+        if results:
+            first_result = results[0]
+            if "TotalCount" in first_result:
+                total_count = first_result.get("TotalCount")
+            elif "totalCount" in first_result:
+                total_count = first_result.get("totalCount")
+        
+        # Map results to clean API keys
+        mapped_results = [_map_list_result_keys(result) for result in results]
+        
+        return mapped_results, total_count
         
     except RetryError as e:
         logger.error(f"All retry attempts exhausted for candidate_id={candidate_id}: {e}")
@@ -232,70 +263,203 @@ async def execute_stored_procedure(
     except (DatabaseConnectionError, DatabaseQueryError) as e:
         raise
     except Exception as e:
-        logger.error(f"Unexpected error in execute_stored_procedure: {e}", exc_info=True)
+        logger.error(f"Unexpected error in execute_list_stored_procedure: {e}", exc_info=True)
         raise DatabaseQueryError(f"Unexpected error: {e}") from e
 
 
-async def get_recommendations(
+async def execute_details_stored_procedure(
+    requirement_id: int,
+    source_id: int
+) -> Optional[Dict[str, Any]]:
+    """
+    Execute the USP_AI_Get_JobSeekerRecommenededJobDetails stored procedure.
+    
+    This function executes the stored procedure asynchronously with retry logic
+    for transient failures and returns the result with clean key names.
+    
+    Returns None if no result found (empty result).
+    """
+    if not requirement_id or requirement_id <= 0:
+        raise ValueError("requirement_id must be a positive integer")
+    if source_id not in [1, 2]:
+        raise ValueError("source_id must be 1 (TA) or 2 (DE)")
+    
+    logger.info(f"Executing details stored procedure for requirement_id={requirement_id}, source_id={source_id}")
+    
+    settings = get_settings()
+    db_pool = get_db_pool()
+    loop = asyncio.get_event_loop()
+    
+    # Retry decorator for transient database errors
+    @retry(
+        stop=stop_after_attempt(settings.recommendations_db_retry_attempts),
+        wait=wait_exponential(multiplier=1, min=settings.recommendations_db_retry_delay, max=10),
+        retry=retry_if_exception_type((pyodbc.Error, DatabaseConnectionError)),
+        reraise=True
+    )
+    async def _execute_with_retry():
+        """Execute stored procedure with retry logic."""
+        async with db_pool.get_connection() as conn:
+            def _execute():
+                """Internal function to execute stored procedure synchronously."""
+                try:
+                    cursor = conn.cursor()
+                    
+                    cursor.execute(
+                        """
+                        EXEC [dbo].[USP_AI_Get_JobSeekerRecommenededJobDetails]
+                            @RequirementID = ?,
+                            @SourceID = ?
+                        """,
+                        (requirement_id, source_id)
+                    )
+                    
+                    results = []
+                    
+                    while True:
+                        if cursor.description:
+                            rows = cursor.fetchall()
+                            for row in rows:
+                                results.append(_convert_row_to_dict(cursor, row))
+                        
+                        if not cursor.nextset():
+                            break
+                    
+                    cursor.close()
+                    
+                    if not results:
+                        logger.info(f"Details stored procedure returned no results for requirement_id={requirement_id}, source_id={source_id}")
+                        return None
+                    
+                    logger.info(f"Details stored procedure executed successfully. Returned 1 record")
+                    return results[0]  # Return first (and should be only) result
+                    
+                except pyodbc.OperationalError as e:
+                    logger.warning(f"Operational error executing stored procedure: {e}")
+                    if _is_retryable_error(e):
+                        raise DatabaseConnectionError(f"Transient database error: {e}") from e
+                    raise DatabaseQueryError(f"Database operational error: {e}") from e
+                    
+                except pyodbc.ProgrammingError as e:
+                    logger.error(f"Programming error executing stored procedure: {e}")
+                    raise DatabaseQueryError(f"Database programming error: {e}") from e
+                    
+                except pyodbc.DatabaseError as e:
+                    logger.error(f"Database error executing stored procedure: {e}")
+                    if _is_retryable_error(e):
+                        raise DatabaseConnectionError(f"Transient database error: {e}") from e
+                    raise DatabaseQueryError(f"Database error: {e}") from e
+                    
+                except pyodbc.Error as e:
+                    logger.error(f"PyODBC error executing stored procedure: {e}")
+                    if _is_retryable_error(e):
+                        raise DatabaseConnectionError(f"Transient database error: {e}") from e
+                    raise DatabaseQueryError(f"Database error: {e}") from e
+                    
+                except Exception as e:
+                    logger.error(f"Unexpected error executing stored procedure: {e}", exc_info=True)
+                    raise DatabaseQueryError(f"Unexpected error: {e}") from e
+            
+            result = await loop.run_in_executor(None, _execute)
+            return result
+    
+    try:
+        result = await _execute_with_retry()
+        if result is None:
+            return None
+        mapped_result = _map_details_result_keys(result)
+        return mapped_result
+        
+    except RetryError as e:
+        logger.error(f"All retry attempts exhausted for requirement_id={requirement_id}, source_id={source_id}: {e}")
+        raise DatabaseConnectionError(
+            f"Failed to execute stored procedure after {settings.recommendations_db_retry_attempts} attempts: {e}"
+        ) from e
+    except (DatabaseConnectionError, DatabaseQueryError) as e:
+        raise
+    except Exception as e:
+        logger.error(f"Unexpected error in execute_details_stored_procedure: {e}", exc_info=True)
+        raise DatabaseQueryError(f"Unexpected error: {e}") from e
+
+
+async def get_recommendations_list(
     candidate_id: int,
     use_cache: bool = True
 ) -> Dict[str, Any]:
     """
-    Get job recommendations for a candidate with optional caching.
+    Get job recommendations list (summary) for a candidate with optional caching.
     
-    This is the main function to retrieve job recommendations. It handles
+    This is the main function to retrieve job recommendations list. It handles
     caching, executes the stored procedure, and returns formatted results.
     """
-    # Constants as specified
-    PAGE_NO = 1
-    PAGE_SIZE = 10
-    JOB_ACTIVITY_TYPE_ID = 0
-    
     # Check cache if enabled
     if use_cache:
         from app.services.recommendations.cache_manager import get_cache_manager
         cache = get_cache_manager()
-        cached_result = cache.get(candidate_id, PAGE_NO, PAGE_SIZE, JOB_ACTIVITY_TYPE_ID)
+        cached_result = cache.get_list(candidate_id)
         
         if cached_result is not None:
-            logger.info(f"Returning cached results for candidate_id={candidate_id}")
+            logger.info(f"Returning cached list results for candidate_id={candidate_id}")
             return cached_result
     
     # Execute stored procedure
-    recommendations = await execute_stored_procedure(
-        candidate_id=candidate_id,
-        page_no=PAGE_NO,
-        page_size=PAGE_SIZE,
-        job_activity_type_id=JOB_ACTIVITY_TYPE_ID
-    )
-    
-    # Extract total count from first record if available
-    total_count = None
-    if recommendations:
-        first_record = recommendations[0]
-        if "TotalCount" in first_record:
-            total_count = first_record.get("TotalCount")
-            for record in recommendations:
-                record.pop("TotalCount", None)
-        elif "totalCount" in first_record:
-            total_count = first_record.get("totalCount")
-            for record in recommendations:
-                record.pop("totalCount", None)
+    recommendations, total_count = await execute_list_stored_procedure(candidate_id=candidate_id)
     
     # Build response
     response = {
         "candidate_id": candidate_id,
         "recommendations": recommendations,
-        "total_count": total_count,
-        "page_no": PAGE_NO,
-        "page_size": PAGE_SIZE
+        "total_count": total_count
     }
     
     # Cache the result if caching is enabled
     if use_cache:
         from app.services.recommendations.cache_manager import get_cache_manager
         cache = get_cache_manager()
-        cache.set(candidate_id, PAGE_NO, PAGE_SIZE, JOB_ACTIVITY_TYPE_ID, response)
+        cache.set_list(candidate_id, response)
     
     return response
 
+
+async def get_recommendation_details(
+    requirement_id: int,
+    source_id: int,
+    use_cache: bool = True
+) -> Optional[Dict[str, Any]]:
+    """
+    Get detailed job information with optional caching.
+    
+    This function retrieves detailed job information for a specific requirement.
+    Returns None if no result found (empty result).
+    """
+    # Check cache if enabled
+    if use_cache:
+        from app.services.recommendations.cache_manager import get_cache_manager
+        cache = get_cache_manager()
+        cached_result = cache.get_details(requirement_id, source_id)
+        
+        if cached_result is not None:
+            logger.info(f"Returning cached details for requirement_id={requirement_id}, source_id={source_id}")
+            return cached_result
+    
+    # Execute stored procedure
+    details = await execute_details_stored_procedure(
+        requirement_id=requirement_id,
+        source_id=source_id
+    )
+    
+    # If no result, return None (empty result)
+    if details is None:
+        return None
+    
+    # Add requirement_id and source_id to response for clarity
+    details["requirement_id"] = requirement_id
+    details["source_id"] = source_id
+    
+    # Cache the result if caching is enabled
+    if use_cache:
+        from app.services.recommendations.cache_manager import get_cache_manager
+        cache = get_cache_manager()
+        cache.set_details(requirement_id, source_id, details)
+    
+    return details
