@@ -116,6 +116,42 @@ class WebhookProcessingService:
                         "similarity_score": matching.similarity_score,
                     }
             
+            # --- Pay rate filter ---
+            # Get candidate's preferred minimum pay rate
+            candidate_min_payrate = candidate_data.get("Preferred_MinimumPayrate_PerHour")
+            
+            # Only check if candidate has a preference
+            if candidate_min_payrate is not None:
+                # Get job's minimum pay rate from parsed_requirements (async with retry)
+                job_min_payrate = await retry_with_backoff(
+                    asyncio.to_thread,
+                    self.supabase.get_requirement_min_payrate,
+                    matching.requirement_id,
+                    max_retries=settings.retry_max_attempts,
+                    initial_delay=settings.retry_initial_delay,
+                    max_delay=settings.retry_max_delay,
+                    exponential_base=settings.retry_exponential_base,
+                )
+                
+                # Rule:
+                # - If job_min_payrate is None -> no info, proceed (apply)
+                # - If job_min_payrate < candidate_min_payrate -> skip
+                # - If job_min_payrate >= candidate_min_payrate -> proceed
+                if job_min_payrate is not None and job_min_payrate < candidate_min_payrate:
+                    logger.info(
+                        f"Skipping apply for cand_id={matching.cand_id}, requirement_id={matching.requirement_id} "
+                        f"because job min_payrate ({job_min_payrate}) is less than candidate's preferred minimum ({candidate_min_payrate})."
+                    )
+                    return {
+                        "success": False,
+                        "message": f"Job minimum pay rate ({job_min_payrate}) is below candidate's preferred minimum ({candidate_min_payrate}). Skipping application.",
+                        "cand_id": matching.cand_id,
+                        "requirement_id": matching.requirement_id,
+                        "similarity_score": matching.similarity_score,
+                        "job_min_payrate": job_min_payrate,
+                        "candidate_preferred_min_payrate": candidate_min_payrate,
+                    }
+            
             # Prepare stored procedure parameters
             sp_params = {
                 'CandidateID': matching.cand_id,

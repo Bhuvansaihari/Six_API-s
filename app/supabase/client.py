@@ -31,7 +31,7 @@ class SupabaseClient:
         """Fetch candidate data from auto_apply_cand table"""
         try:
             response = self.client.table("auto_apply_cand").select(
-                "cand_id, disability_id, veteran_disclosure_id, ethnicity_id, race_id, gender_id, is_remote_preferred"
+                "cand_id, disability_id, veteran_disclosure_id, ethnicity_id, race_id, gender_id, is_remote_preferred, Preferred_MinimumPayrate_PerHour"
             ).eq("cand_id", cand_id).execute()
             
             if response.data and len(response.data) > 0:
@@ -69,6 +69,36 @@ class SupabaseClient:
         except Exception as e:
             logger.error(
                 f"Error fetching is_remote_location for requirement_id {requirement_id}: {str(e)}"
+            )
+            raise
+    
+    def get_requirement_min_payrate(self, requirement_id: str) -> Optional[float]:
+        """
+        Return min_payrate for a requirement from parsed_requirements.
+        
+        Returns:
+            float -> job's minimum pay rate
+            None  -> no row found or min_payrate is NULL (no info)
+        """
+        try:
+            response = (
+                self.client.table("parsed_requirements")
+                .select("requirement_id, min_payrate")
+                .eq("requirement_id", requirement_id)
+                .limit(1)
+                .execute()
+            )
+            
+            if not response.data or len(response.data) == 0:
+                return None
+            
+            value = response.data[0].get("min_payrate")
+            if value is None:
+                return None
+            return float(value)
+        except Exception as e:
+            logger.error(
+                f"Error fetching min_payrate for requirement_id {requirement_id}: {str(e)}"
             )
             raise
     

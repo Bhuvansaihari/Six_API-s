@@ -23,6 +23,8 @@ from app.api.recommendations.router import router as recommendations_router
 from app.api.requirement_details.router import router as requirement_details_router
 from app.api.outreach_agent.router import router as outreach_agent_router
 from app.api.manual_apply.router import router as manual_apply_router
+# TEMPORARY TEST ENDPOINT - Can be safely deleted later
+from app.api.resume_test.router import router as resume_test_router
 
 
 @asynccontextmanager
@@ -163,6 +165,8 @@ app.include_router(recommendations_router)
 app.include_router(requirement_details_router)
 app.include_router(outreach_agent_router)
 app.include_router(manual_apply_router)
+# TEMPORARY TEST ENDPOINT - Can be safely deleted later
+app.include_router(resume_test_router)
 
 
 @app.get("/")

@@ -15,67 +15,104 @@ from app.services.resume_intake.vector_store import VectorStoreService
 logger = logging.getLogger(__name__)
 
 
-# Prompt for structuring resume data
-STRUCTURE_PROMPT = """You are a data structuring specialist with deep knowledge of resume parsing and information extraction. 
-Your task is to analyze the extracted resume text and structure it into a comprehensive JSON format.
+# Canonical JSON Schema (DO NOT CHANGE KEYS)
+CANONICAL_SCHEMA = {
+    "basic_information": {
+        "first_name": None,
+        "last_name": None,
+        "email": None,
+        "mobile_phone": None,
+        "home_phone": None,
+        "work_phone": None,
+        "work_extension": None,
+        "birth_date": None
+    },
+    "location_information": {
+        "address": None,
+        "city": None,
+        "country": None,
+        "zipcode": None
+    },
+    "skills_expertise": {
+        "total_experience_years": None,
+        "technical_skills": [],
+        "soft_skills": [],
+        "languages": []
+    },
+    "professional_summary": None,
+    "education": [
+        {
+            "degree": None,
+            "field_of_study": None,
+            "school": None,
+            "year": None,
+            "gpa": None
+        }
+    ],
+    "certifications": [
+        {
+            "name": None,
+            "issuing_organization": None,
+            "issue_date": None,
+            "expiry_date": None,
+            "credential_id": None,
+            "credential_url": None
+        }
+    ],
+    "work_experience": [
+        {
+            "job_title": None,
+            "company": None,
+            "location": None,
+            "start_date": None,
+            "end_date": None,
+            "currently_working": None,
+            "job_description": None
+        }
+    ],
+    "projects": [
+        {
+            "name": None,
+            "description": None,
+            "url": None,
+            "start_date": None,
+            "end_date": None,
+            "technologies_used": []
+        }
+    ],
+    "achievements": []
+}
 
-Extract and organize the following information:
 
-1. PersonalInformation:
-   - Summary (if available)
-   - Name
-   - Email
-   - Phone Number
-   - Location (city, State, StateShortName, Country)
-   - Zipcode
-   - Links (LinkedIn, GitHub, Portfolio, etc.)
+# OpenAI System Message
+SYSTEM_PROMPT = """You are a resume parser.
+Return ONLY valid JSON.
+Follow the provided schema EXACTLY.
+Do NOT add extra keys.
+Do NOT guess or infer missing information.
+If a field is not explicitly present in the resume, return null or [].
+Dates must be in YYYY-MM-DD format or null.
+total_experience_years must be an integer (rounded down)."""
 
-2. ProfessionalExperience:
-   - Overall Experience (calculate total years based on employment dates)
-   - Category (e.g., Software Engineer, Data Scientist, etc.)
-   - List of Experiences, each with:
-     * Job Title
-     * Company Name
-     * Industry
-     * Dates (start and end dates)
-     * Experience years (duration at this position)
-     * Location
-     * Skills used
-     * Responsibilities
 
-3. Education:
-   - Degree type
-   - Specialization
-   - Institution
-   - Graduation date
+def get_user_prompt(resume_text: str) -> str:
+    """Generate user prompt with schema and resume text."""
+    schema_str = json.dumps(CANONICAL_SCHEMA, indent=2)
+    return f"""Extract information from the following resume text and map it strictly to the provided JSON schema.
 
-4. Skills:
-   - Technical Skills
-   - Soft Skills
-   - Language Proficiency
+IMPORTANT RULES:
+- Output must match the schema EXACTLY
+- Do not infer or assume missing values
+- If data is absent, return null or []
+- Split full name into first_name and last_name
+- Languages should be simple strings (e.g., "English", "Hindi")
+- total_experience_years must be an integer
 
-5. Certification:
-   - Name
-   - Issuing Organization
-   - Date
+SCHEMA:
+{schema_str}
 
-6. Projects (if any):
-   - Project name
-   - Description
-   - Technologies used
-   - Duration
-
-7. AdditionalInformation:
-   - Volunteer Experience
-   - Interests/Hobbies
-
-IMPORTANT REQUIREMENTS:
-- Calculate overall experience based on employment dates
-- All JSON keys must be in snake_case (e.g., personal_information, not PersonalInformation)
-- Use 'certification' (singular), not 'certifications'
-- Ensure all data is accurately extracted and properly formatted
-- Return ONLY valid JSON, no additional text or markdown
-- If a field is not found, use null or empty array/object as appropriate
+RESUME TEXT:
+{resume_text}
 """
 
 
@@ -87,7 +124,7 @@ async def structure_resume_data(text: str) -> Dict[str, Any]:
         text: Raw resume text
         
     Returns:
-        Structured JSON dictionary
+        Structured JSON dictionary matching the canonical schema
         
     Raises:
         ValueError: If OpenAI API key is not configured
@@ -99,11 +136,13 @@ async def structure_resume_data(text: str) -> Dict[str, Any]:
     
     client = AsyncOpenAI(api_key=settings.openai_api_key.get_secret_value())
     
+    user_prompt = get_user_prompt(text)
+    
     response = await client.chat.completions.create(
         model="gpt-4o",
         messages=[
-            {"role": "system", "content": STRUCTURE_PROMPT},
-            {"role": "user", "content": f"Extract and structure the following resume text into JSON format:\n\n{text}"}
+            {"role": "system", "content": SYSTEM_PROMPT},
+            {"role": "user", "content": user_prompt}
         ],
         response_format={"type": "json_object"},
         temperature=0.1
@@ -119,7 +158,7 @@ def convert_json_to_text(data: Dict[str, Any]) -> str:
     Convert structured JSON resume data to text representation for embeddings.
     
     Args:
-        data: Structured resume JSON
+        data: Structured resume JSON (canonical schema)
         
     Returns:
         Text representation of the resume
@@ -143,104 +182,118 @@ def convert_json_to_text(data: Dict[str, Any]) -> str:
                 return default if default is not None else []
         return value if isinstance(value, list) else (default if default is not None else [])
     
-    # Personal Information
-    if 'personal_information' in data:
-        pi_raw = data['personal_information']
-        pi = safe_get_dict(pi_raw, {})
-        
-        if isinstance(pi, dict):
-            # Try both snake_case and PascalCase keys
-            name = pi.get('Name', pi.get('name', ''))
-            email = pi.get('Email', pi.get('email', ''))
-            phone = pi.get('Phone Number', pi.get('phone_number', ''))
-            text_parts.append(f"Name: {name}")
-            text_parts.append(f"Email: {email}")
-            text_parts.append(f"Phone: {phone}")
+    # Basic Information
+    if 'basic_information' in data:
+        basic = safe_get_dict(data.get('basic_information'), {})
+        if isinstance(basic, dict):
+            first_name = basic.get('first_name', '')
+            last_name = basic.get('last_name', '')
+            name = f"{first_name} {last_name}".strip()
+            if name:
+                text_parts.append(f"Name: {name}")
             
-            if 'Location' in pi or 'location' in pi:
-                loc_raw = pi.get('Location') or pi.get('location', {})
-                loc = safe_get_dict(loc_raw, {})
-                if isinstance(loc, dict):
-                    city = loc.get('city', '') or loc.get('City', '')
-                    state = loc.get('state', '') or loc.get('State', '')
-                    country = loc.get('country', '') or loc.get('Country', '')
-                    text_parts.append(f"Location: {city}, {state}, {country}")
+            email = basic.get('email', '')
+            if email:
+                text_parts.append(f"Email: {email}")
             
-            summary = pi.get('Summary', pi.get('summary', ''))
-            if summary:
-                text_parts.append(f"Summary: {summary}")
+            mobile = basic.get('mobile_phone', '')
+            if mobile:
+                text_parts.append(f"Phone: {mobile}")
     
-    # Professional Experience
-    if 'professional_experience' in data:
-        pe_raw = data['professional_experience']
-        pe = safe_get_dict(pe_raw, {})
-        
-        if isinstance(pe, dict):
-            exp_years = pe.get('Overall Experience', pe.get('overall_experience', ''))
-            category = pe.get('Category', pe.get('category', ''))
-            text_parts.append(f"Overall Experience: {exp_years} years")
-            text_parts.append(f"Category: {category}")
+    # Location Information
+    if 'location_information' in data:
+        location = safe_get_dict(data.get('location_information'), {})
+        if isinstance(location, dict):
+            location_parts = []
+            if location.get('address'):
+                location_parts.append(str(location.get('address')))
+            if location.get('city'):
+                location_parts.append(str(location.get('city')))
+            if location.get('country'):
+                location_parts.append(str(location.get('country')))
+            if location_parts:
+                text_parts.append(f"Location: {', '.join(location_parts)}")
+    
+    # Professional Summary
+    if 'professional_summary' in data and data.get('professional_summary'):
+        text_parts.append(f"Summary: {data.get('professional_summary')}")
+    
+    # Skills and Expertise
+    if 'skills_expertise' in data:
+        skills = safe_get_dict(data.get('skills_expertise'), {})
+        if isinstance(skills, dict):
+            total_exp = skills.get('total_experience_years')
+            if total_exp is not None:
+                text_parts.append(f"Total Experience: {total_exp} years")
             
-            if 'Experiences' in pe or 'experiences' in pe:
-                experiences = pe.get('Experiences', pe.get('experiences', []))
-                experiences = safe_get_list(experiences, [])
-                for exp in experiences:
-                    if isinstance(exp, dict):
-                        job_title = exp.get('Job Title', exp.get('job_title', ''))
-                        company = exp.get('Company Name', exp.get('company_name', ''))
-                        dates = exp.get('Dates', exp.get('dates', ''))
-                        exp_yrs = exp.get('Experience Years', exp.get('experience_years', ''))
-                        text_parts.append(f"Job: {job_title} at {company}")
-                        text_parts.append(f"Duration: {dates} ({exp_yrs} years)")
-                        if 'Responsibilities' in exp or 'responsibilities' in exp:
-                            resp = exp.get('Responsibilities', exp.get('responsibilities', []))
-                            if isinstance(resp, list):
-                                text_parts.append(f"Responsibilities: {', '.join(str(r) for r in resp)}")
+            tech_skills = skills.get('technical_skills', [])
+            if isinstance(tech_skills, list) and tech_skills:
+                text_parts.append(f"Technical Skills: {', '.join(str(s) for s in tech_skills)}")
+            
+            soft_skills = skills.get('soft_skills', [])
+            if isinstance(soft_skills, list) and soft_skills:
+                text_parts.append(f"Soft Skills: {', '.join(str(s) for s in soft_skills)}")
+            
+            languages = skills.get('languages', [])
+            if isinstance(languages, list) and languages:
+                text_parts.append(f"Languages: {', '.join(str(l) for l in languages)}")
+    
+    # Work Experience
+    if 'work_experience' in data:
+        work_exp = safe_get_list(data.get('work_experience'), [])
+        for exp in work_exp:
+            if isinstance(exp, dict):
+                job_title = exp.get('job_title', '')
+                company = exp.get('company', '')
+                start_date = exp.get('start_date', '')
+                end_date = exp.get('end_date', '')
+                currently_working = exp.get('currently_working', False)
+                
+                if job_title or company:
+                    text_parts.append(f"Job: {job_title} at {company}")
+                    if start_date:
+                        end_str = "Present" if currently_working else end_date
+                        text_parts.append(f"Duration: {start_date} to {end_str}")
+                    if exp.get('job_description'):
+                        text_parts.append(f"Description: {exp.get('job_description')}")
     
     # Education
     if 'education' in data:
-        education = safe_get_list(data['education'], [])
+        education = safe_get_list(data.get('education'), [])
         for edu in education:
             if isinstance(edu, dict):
-                degree = edu.get('Degree Type', edu.get('degree_type', ''))
-                specialization = edu.get('Specialization', edu.get('specialization', ''))
-                institution = edu.get('Institution', edu.get('institution', ''))
-                text_parts.append(f"Education: {degree} in {specialization} from {institution}")
-    
-    # Skills
-    if 'skills' in data:
-        skills_raw = data['skills']
-        skills = safe_get_dict(skills_raw, {})
-        if isinstance(skills, dict):
-            tech_skills = skills.get('Technical Skills', skills.get('technical_skills', []))
-            if isinstance(tech_skills, str):
-                tech_skills = [s.strip() for s in tech_skills.split(',') if s.strip()]
-            if isinstance(tech_skills, list):
-                text_parts.append(f"Technical Skills: {', '.join(str(s) for s in tech_skills)}")
-            
-            soft_skills = skills.get('Soft Skills', skills.get('soft_skills', []))
-            if isinstance(soft_skills, str):
-                soft_skills = [s.strip() for s in soft_skills.split(',') if s.strip()]
-            if isinstance(soft_skills, list):
-                text_parts.append(f"Soft Skills: {', '.join(str(s) for s in soft_skills)}")
+                degree = edu.get('degree', '')
+                field = edu.get('field_of_study', '')
+                school = edu.get('school', '')
+                year = edu.get('year', '')
+                if degree or field or school:
+                    text_parts.append(f"Education: {degree} in {field} from {school} ({year})")
     
     # Certifications
-    if 'certification' in data:
-        certs = safe_get_list(data['certification'], [])
+    if 'certifications' in data:
+        certs = safe_get_list(data.get('certifications'), [])
         for cert in certs:
             if isinstance(cert, dict):
-                name = cert.get('Name', cert.get('name', ''))
-                org = cert.get('Issuing Organization', cert.get('issuing_organization', ''))
-                text_parts.append(f"Certification: {name} from {org}")
+                name = cert.get('name', '')
+                org = cert.get('issuing_organization', '')
+                if name or org:
+                    text_parts.append(f"Certification: {name} from {org}")
     
     # Projects
     if 'projects' in data:
-        projects = safe_get_list(data['projects'], [])
+        projects = safe_get_list(data.get('projects'), [])
         for project in projects:
             if isinstance(project, dict):
-                name = project.get('Name', project.get('name', ''))
-                desc = project.get('Description', project.get('description', ''))
-                text_parts.append(f"Project: {name} - {desc}")
+                name = project.get('name', '')
+                desc = project.get('description', '')
+                if name or desc:
+                    text_parts.append(f"Project: {name} - {desc}")
+    
+    # Achievements
+    if 'achievements' in data:
+        achievements = safe_get_list(data.get('achievements'), [])
+        if achievements:
+            text_parts.append(f"Achievements: {', '.join(str(a) for a in achievements)}")
     
     return "\n".join(text_parts)
 
@@ -251,7 +304,7 @@ async def process_resume_async(file_path: str, candidate_id: int) -> Dict[str, A
     
     Pipeline steps:
     1. Parse resume file (PDF/DOCX/TXT) to extract text
-    2. Structure data using GPT-4o
+    2. Structure data using GPT-4o with canonical schema
     3. Update database records in parallel (raw and parsed)
     4. Generate embeddings
     5. Store embeddings in Qdrant
@@ -272,7 +325,7 @@ async def process_resume_async(file_path: str, candidate_id: int) -> Dict[str, A
         loop = asyncio.get_event_loop()
         text = await loop.run_in_executor(None, parser.parse, file_path)
         
-        # Step 2: Structure data using GPT-4o (async)
+        # Step 2: Structure data using GPT-4o (async) with canonical schema
         structured_data = await structure_resume_data(text)
         
         # Step 3: Prepare data for parallel operations
@@ -336,4 +389,3 @@ async def process_resume_async(file_path: str, candidate_id: int) -> Dict[str, A
             "error": str(e),
             "message": f"Error processing resume: {str(e)}"
         }
-

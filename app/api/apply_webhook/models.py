@@ -32,6 +32,8 @@ class AutoApplyCand(BaseModel):
     ethnicity_id: Optional[int] = None
     race_id: Optional[int] = None
     gender_id: Optional[int] = None
+    is_remote_preferred: Optional[bool] = None
+    Preferred_MinimumPayrate_PerHour: Optional[float] = None
 
 
 class StoredProcedureParams(BaseModel):

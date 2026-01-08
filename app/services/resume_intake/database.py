@@ -73,9 +73,11 @@ class DatabaseService:
         Upsert raw resume data in auto_apply_cand table.
         Inserts if candidate doesn't exist, updates if candidate exists.
         
+        Uses canonical schema: basic_information, location_information, skills_expertise
+        
         Args:
             candidate_id: Candidate ID (cand_id) - required
-            resume_json: Structured JSON data
+            resume_json: Structured JSON data (canonical schema)
             resume_file_path: Path to the resume file
             
         Returns:
@@ -92,88 +94,87 @@ class DatabaseService:
         if not candidate_id:
             raise ValueError("candidate_id is required")
         
-        # Extract personal information - handle if it's a string (JSON) or dict
-        personal_info_raw = resume_json.get('personal_information', {})
-        if isinstance(personal_info_raw, str):
-            try:
-                personal_info = json.loads(personal_info_raw)
-            except:
-                personal_info = {}
-        else:
-            personal_info = personal_info_raw if isinstance(personal_info_raw, dict) else {}
+        # Helper function to safely get dict value
+        def safe_get_dict(value, default=None):
+            if isinstance(value, str):
+                try:
+                    return json.loads(value)
+                except:
+                    return default if default is not None else {}
+            return value if isinstance(value, dict) else (default if default is not None else {})
         
-        professional_exp_raw = resume_json.get('professional_experience', {})
-        if isinstance(professional_exp_raw, str):
-            try:
-                professional_exp = json.loads(professional_exp_raw)
-            except:
-                professional_exp = {}
-        else:
-            professional_exp = professional_exp_raw if isinstance(professional_exp_raw, dict) else {}
+        # Extract from canonical schema
+        basic_info = safe_get_dict(resume_json.get('basic_information'), {})
+        location_info = safe_get_dict(resume_json.get('location_information'), {})
+        skills_info = safe_get_dict(resume_json.get('skills_expertise'), {})
         
         # Prepare update data for auto_apply_cand table
         update_data = {}
         
-        # Name fields (only update if provided)
-        if isinstance(personal_info, dict):
-            name = personal_info.get('Name', '')
-            name = str(name).strip() if name else ''
-            if name:
-                name_parts = name.split(' ', 1) if name else ['', '']
-                update_data['first_name'] = name_parts[0] if name_parts[0] else None
-                update_data['last_name'] = name_parts[1] if len(name_parts) > 1 and name_parts[1] else None
+        # Name fields from basic_information
+        if isinstance(basic_info, dict):
+            first_name = basic_info.get('first_name', '')
+            last_name = basic_info.get('last_name', '')
+            first_name = str(first_name).strip() if first_name else ''
+            last_name = str(last_name).strip() if last_name else ''
+            if first_name:
+                update_data['first_name'] = first_name
+            if last_name:
+                update_data['last_name'] = last_name
             
-            # Email (only update if provided)
-            email = personal_info.get('Email', '')
-            email = str(email).strip() if email else ''
-            if email:
-                update_data['email'] = email
-        
-            # Phone numbers (only update if provided)
-            phone = personal_info.get('Phone Number', '')
-            phone = str(phone).strip() if phone else ''
-            if phone:
-                update_data['mobile'] = phone
+            # Note: Email is NOT updated from resume - it's already set by another service before resume upload
             
-            # Location fields
-            location_raw = personal_info.get('Location', {})
-            if isinstance(location_raw, str):
-                try:
-                    location = json.loads(location_raw)
-                except:
-                    location = {}
-            else:
-                location = location_raw if isinstance(location_raw, dict) else {}
+            # Phone - prefer mobile_phone, fallback to home_phone or work_phone
+            mobile = basic_info.get('mobile_phone', '')
+            if not mobile:
+                mobile = basic_info.get('home_phone', '')
+            if not mobile:
+                mobile = basic_info.get('work_phone', '')
+            mobile = str(mobile).strip() if mobile else ''
+            if mobile:
+                update_data['mobile'] = mobile
+        
+        # Location fields from location_information
+        if isinstance(location_info, dict):
+            city = location_info.get('city', '')
+            city = str(city).strip() if city else ''
+            if city:
+                update_data['city'] = city
             
-            if isinstance(location, dict):
-                update_data['city'] = location.get('city', '') or None
-                update_data['country'] = location.get('Country', '') or None
-                update_data['zipcode'] = location.get('Zipcode', '') or None
-                # Combine address fields if available
-                address_parts = []
-                if location.get('address'):
-                    address_parts.append(str(location.get('address')))
-                if location.get('city'):
-                    address_parts.append(str(location.get('city')))
-                if location.get('State'):
-                    address_parts.append(str(location.get('State')))
-                if location.get('Zipcode'):
-                    address_parts.append(str(location.get('Zipcode')))
-                update_data['address'] = ", ".join(address_parts) if address_parts else None
+            country = location_info.get('country', '')
+            country = str(country).strip() if country else ''
+            if country:
+                update_data['country'] = country
+            
+            zipcode = location_info.get('zipcode', '')
+            zipcode = str(zipcode).strip() if zipcode else ''
+            if zipcode:
+                update_data['zipcode'] = zipcode
+            
+            # Combine address fields
+            address_parts = []
+            address = location_info.get('address', '')
+            if address:
+                address_parts.append(str(address))
+            if city:
+                address_parts.append(city)
+            if country:
+                address_parts.append(country)
+            if zipcode:
+                address_parts.append(zipcode)
+            if address_parts:
+                update_data['address'] = ", ".join(address_parts)
         
-        # Experience (from professional experience)
-        if isinstance(professional_exp, dict):
-            experience_years = professional_exp.get('Overall Experience', 0)
-        else:
-            experience_years = 0
-        
-        if isinstance(experience_years, str):
-            # Try to extract number from string like "5 years"
-            try:
-                experience_years = float(''.join(filter(str.isdigit, experience_years.split()[0])))
-            except:
+        # Experience from skills_expertise
+        if isinstance(skills_info, dict):
+            experience_years = skills_info.get('total_experience_years', 0)
+            if experience_years is None:
                 experience_years = 0
-        update_data['experience'] = int(experience_years) if experience_years else 0
+            try:
+                experience_years = int(float(experience_years))
+            except (ValueError, TypeError):
+                experience_years = 0
+            update_data['experience'] = experience_years
         
         # File information
         if os.path.exists(resume_file_path):
@@ -201,9 +202,7 @@ class DatabaseService:
                 insert_data['first_name'] = 'Unknown'
             if 'last_name' not in insert_data or not insert_data['last_name']:
                 insert_data['last_name'] = 'User'
-            if 'email' not in insert_data or not insert_data['email']:
-                # Generate a temporary email if not provided
-                insert_data['email'] = f"temp_{secrets.token_hex(8)}@example.com"
+            # Note: Email is NOT set here - it's already set by another service before resume upload
             if 'password' not in insert_data:
                 # Generate a random password if not provided
                 insert_data['password'] = secrets.token_urlsafe(16)
@@ -244,9 +243,11 @@ class DatabaseService:
         """
         Update parsed resume data in parsed_cand_resume table.
         
+        Maps from canonical schema to database fields using normalize function.
+        
         Args:
             candidate_id: Candidate ID (cand_id) from auto_apply_cand table
-            resume_data: Complete parsed resume JSON
+            resume_data: Complete parsed resume JSON (canonical schema)
             resume_text: Raw text content of the resume
             
         Returns:
@@ -262,10 +263,14 @@ class DatabaseService:
         if not candidate_id:
             raise ValueError("candidate_id is required")
         
-        # Extract data from resume_data - handle if values are strings (JSON) or dicts
-        def safe_get_dict(data, key, default=None):
-            """Safely get a dict value, handling JSON strings."""
-            value = data.get(key, default) if isinstance(data, dict) else default
+        def normalize(value):
+            """Normalize empty values to None."""
+            if value in ("", [], {}):
+                return None
+            return value
+        
+        # Helper function to safely get dict value
+        def safe_get_dict(value, default=None):
             if isinstance(value, str):
                 try:
                     return json.loads(value)
@@ -273,9 +278,7 @@ class DatabaseService:
                     return default if default is not None else {}
             return value if isinstance(value, dict) else (default if default is not None else {})
         
-        def safe_get_list(data, key, default=None):
-            """Safely get a list value, handling JSON strings."""
-            value = data.get(key, default) if isinstance(data, dict) else default
+        def safe_get_list(value, default=None):
             if isinstance(value, str):
                 try:
                     return json.loads(value)
@@ -283,13 +286,15 @@ class DatabaseService:
                     return default if default is not None else []
             return value if isinstance(value, list) else (default if default is not None else [])
         
-        personal_info = safe_get_dict(resume_data, 'personal_information', {})
-        professional_exp = safe_get_dict(resume_data, 'professional_experience', {})
-        skills_data = safe_get_dict(resume_data, 'skills', {})
-        education_data = safe_get_list(resume_data, 'education', [])
-        certification_data = safe_get_list(resume_data, 'certification', [])
-        projects_data = safe_get_list(resume_data, 'projects', [])
-        additional_info = safe_get_dict(resume_data, 'additional_information', {})
+        # Extract from canonical schema
+        basic = safe_get_dict(resume_data.get('basic_information'), {})
+        location = safe_get_dict(resume_data.get('location_information'), {})
+        skills = safe_get_dict(resume_data.get('skills_expertise'), {})
+        education_data = safe_get_list(resume_data.get('education'), [])
+        certifications_data = safe_get_list(resume_data.get('certifications'), [])
+        work_experience_data = safe_get_list(resume_data.get('work_experience'), [])
+        projects_data = safe_get_list(resume_data.get('projects'), [])
+        achievements_data = safe_get_list(resume_data.get('achievements'), [])
         
         # Prepare update data for parsed_cand_resume table
         update_data = {}
@@ -300,110 +305,60 @@ class DatabaseService:
         update_data['resume_json'] = resume_data
         update_data['last_updated'] = datetime.utcnow().isoformat()
         
-        # Personal information fields (only update if provided)
-        if isinstance(personal_info, dict):
-            name = personal_info.get('Name', '')
-            name = str(name).strip() if name else ''
-            if name:
-                update_data['full_name'] = name
-            
-            email = personal_info.get('Email', '')
-            email = str(email).strip() if email else ''
-            if email:
-                update_data['email'] = email
-            
-            phone = personal_info.get('Phone Number', '')
-            phone = str(phone).strip() if phone else ''
-            if phone:
-                update_data['phone'] = phone
+        # Map from canonical schema to DB fields
+        # Full name
+        first_name = basic.get('first_name', '') or ''
+        last_name = basic.get('last_name', '') or ''
+        full_name = f"{first_name} {last_name}".strip()
+        update_data['full_name'] = normalize(full_name)
         
-            # Location
-            location_raw = personal_info.get('Location', {})
-            if isinstance(location_raw, str):
-                try:
-                    location = json.loads(location_raw)
-                except:
-                    location = {}
-            else:
-                location = location_raw if isinstance(location_raw, dict) else {}
-            
-            if isinstance(location, dict):
-                location_parts = []
-                if location.get('city'):
-                    location_parts.append(str(location.get('city')))
-                if location.get('State'):
-                    location_parts.append(str(location.get('State')))
-                if location.get('Country'):
-                    location_parts.append(str(location.get('Country')))
-                update_data['location'] = ", ".join(location_parts) if location_parts else None
-                update_data['zipcode'] = location.get('Zipcode', '') or None
-            
-            # Professional summary
-            summary = personal_info.get('Summary', '')
-            summary = str(summary).strip() if summary else ''
-            if summary:
-                update_data['professional_summary'] = summary
+        # Email
+        email = basic.get('email', '') or ''
+        update_data['email'] = normalize(email)
         
-        # Experience
-        if isinstance(professional_exp, dict):
-            experience_years = professional_exp.get('Overall Experience', 0)
-        else:
-            experience_years = 0
+        # Phone - prefer mobile_phone
+        phone = basic.get('mobile_phone', '') or basic.get('home_phone', '') or basic.get('work_phone', '') or ''
+        update_data['phone'] = normalize(phone)
         
-        if isinstance(experience_years, str):
-            try:
-                experience_years = int(float(experience_years))
-            except ValueError:
-                experience_years = 0
-        update_data['total_experience_years'] = experience_years
+        # Location
+        location_parts = []
+        city = location.get('city', '') or ''
+        country = location.get('country', '') or ''
+        if city:
+            location_parts.append(city)
+        if country:
+            location_parts.append(country)
+        update_data['location'] = normalize(", ".join(location_parts) if location_parts else None)
+        update_data['zipcode'] = normalize(location.get('zipcode', '') or '')
         
-        # Skills - convert to arrays
-        technical_skills = []
-        if isinstance(skills_data, dict):
-            tech_skills_str = skills_data.get('Technical Skills', '')
-            if tech_skills_str:
-                tech_skills_str = str(tech_skills_str)
-                # Split by common delimiters and clean up
-                technical_skills = [s.strip() for s in tech_skills_str.replace(',', '|').replace(';', '|').split('|') if s.strip()]
+        # Professional summary
+        professional_summary = resume_data.get('professional_summary', '') or ''
+        update_data['professional_summary'] = normalize(professional_summary)
         
-        soft_skills = []
-        if isinstance(skills_data, dict):
-            soft_skills_str = skills_data.get('Soft Skills', '')
-            if soft_skills_str:
-                soft_skills_str = str(soft_skills_str)
-                soft_skills = [s.strip() for s in soft_skills_str.replace(',', '|').replace(';', '|').split('|') if s.strip()]
+        # Total experience years
+        total_exp = skills.get('total_experience_years', 0)
+        if total_exp is None:
+            total_exp = 0
+        try:
+            total_exp = int(float(total_exp))
+        except (ValueError, TypeError):
+            total_exp = 0
+        update_data['total_experience_years'] = total_exp
         
-        languages = []
-        if isinstance(skills_data, dict):
-            languages_str = skills_data.get('Languages', '')
-            if languages_str:
-                languages_str = str(languages_str)
-                languages = [s.strip() for s in languages_str.replace(',', '|').replace(';', '|').split('|') if s.strip()]
+        # Skills - already arrays in canonical schema
+        technical_skills = skills.get('technical_skills', [])
+        soft_skills = skills.get('soft_skills', [])
+        languages = skills.get('languages', [])
+        update_data['technical_skills'] = normalize(technical_skills) if technical_skills else None
+        update_data['soft_skills'] = normalize(soft_skills) if soft_skills else None
+        update_data['languages'] = normalize(languages) if languages else None
         
-        update_data['technical_skills'] = technical_skills if technical_skills else None
-        update_data['soft_skills'] = soft_skills if soft_skills else None
-        update_data['languages'] = languages if languages else None
-        
-        # JSONB fields
-        if isinstance(certification_data, list):
-            update_data['certifications'] = certification_data
-        if isinstance(education_data, list):
-            update_data['education'] = education_data
-        if isinstance(professional_exp, dict) and isinstance(professional_exp.get('experiences', []), list):
-            update_data['work_experience'] = professional_exp.get('experiences', [])
-        if isinstance(projects_data, list):
-            update_data['projects'] = projects_data
-        
-        # Achievements
-        achievements = []
-        if isinstance(additional_info, dict):
-            achievements_raw = additional_info.get('Achievements', '')
-            if achievements_raw:
-                if isinstance(achievements_raw, str):
-                    achievements = [s.strip() for s in achievements_raw.replace(';', ',').split(',') if s.strip()]
-                elif isinstance(achievements_raw, list):
-                    achievements = [str(a).strip() for a in achievements_raw if str(a).strip()]
-        update_data['achievements'] = achievements if achievements else None
+        # JSONB fields - store as-is from canonical schema
+        update_data['education'] = normalize(education_data) if education_data else None
+        update_data['certifications'] = normalize(certifications_data) if certifications_data else None
+        update_data['work_experience'] = normalize(work_experience_data) if work_experience_data else None
+        update_data['projects'] = normalize(projects_data) if projects_data else None
+        update_data['achievements'] = normalize(achievements_data) if achievements_data else None
         
         # Use upsert (insert or update) based on cand_id
         try:
