@@ -76,7 +76,7 @@ async def lifespan(app: FastAPI):
     # Initialize database pool and rate limiter for Recommendations API
     try:
         from app.services.recommendations.db_pool import get_db_pool
-        get_db_pool()  # Initialize the pool
+        await get_db_pool()  # Initialize the pool with await
         logging.info("Recommendations API: Database pool initialized")
     except Exception as e:
         logging.warning(f"Recommendations API: Database pool initialization failed: {e}")
@@ -113,7 +113,7 @@ async def lifespan(app: FastAPI):
     # Close Recommendations API database pool
     try:
         from app.services.recommendations.db_pool import close_db_pool
-        close_db_pool()
+        await close_db_pool()
         logging.info("Recommendations API: Database pool closed")
     except Exception as e:
         logging.warning(f"Error closing Recommendations API database pool: {e}")

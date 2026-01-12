@@ -168,7 +168,7 @@ async def execute_list_stored_procedure(
     logger.info(f"Executing list stored procedure for candidate_id={candidate_id}")
     
     settings = get_settings()
-    db_pool = get_db_pool()
+    db_pool = await get_db_pool()
     loop = asyncio.get_event_loop()
     
     # Retry decorator for transient database errors
@@ -180,11 +180,15 @@ async def execute_list_stored_procedure(
     )
     async def _execute_with_retry():
         """Execute stored procedure with retry logic."""
-        async with db_pool.get_connection() as conn:
+        conn = await db_pool.get_connection()
+        try:
             def _execute():
                 """Internal function to execute stored procedure synchronously."""
+                cursor = None
                 try:
                     cursor = conn.cursor()
+                    
+                    logger.debug(f"Executing stored procedure USP_AI_Get_JobSeekerRecommenededJobList with candidate_id={candidate_id}")
                     
                     cursor.execute(
                         """
@@ -196,47 +200,99 @@ async def execute_list_stored_procedure(
                     
                     results = []
                     
+                    # Process all result sets
+                    # Note: SQL Server stored procedures may raise HY000 on nextset() after the last result set
+                    # This is expected behavior and should be handled gracefully
                     while True:
                         if cursor.description:
+                            logger.debug(f"Processing result set with {len(cursor.description)} columns")
                             rows = cursor.fetchall()
+                            logger.debug(f"Fetched {len(rows)} rows from current result set")
                             for row in rows:
                                 results.append(_convert_row_to_dict(cursor, row))
                         
-                        if not cursor.nextset():
-                            break
+                        # Try to move to next result set
+                        # SQL Server may raise HY000 error here after the last result set
+                        try:
+                            if not cursor.nextset():
+                                break
+                        except pyodbc.Error as e:
+                            # HY000 error on nextset() after last result set is expected
+                            error_code = e.args[0] if e.args else None
+                            if error_code == 'HY000':
+                                logger.debug("Reached end of result sets (HY000 on nextset - expected)")
+                                break
+                            else:
+                                # Re-raise if it's a different error
+                                raise
                     
-                    cursor.close()
                     logger.info(f"List stored procedure executed successfully. Returned {len(results)} records")
                     return results
                     
                 except pyodbc.OperationalError as e:
-                    logger.warning(f"Operational error executing stored procedure: {e}")
+                    error_code = e.args[0] if e.args else 'UNKNOWN'
+                    error_msg = e.args[1] if len(e.args) > 1 else str(e)
+                    logger.error(f"Operational error executing stored procedure")
+                    logger.error(f"Error Code: {error_code}")
+                    logger.error(f"Error Message: {error_msg}")
+                    logger.error(f"Candidate ID: {candidate_id}")
                     if _is_retryable_error(e):
                         raise DatabaseConnectionError(f"Transient database error: {e}") from e
                     raise DatabaseQueryError(f"Database operational error: {e}") from e
                     
                 except pyodbc.ProgrammingError as e:
-                    logger.error(f"Programming error executing stored procedure: {e}")
+                    error_code = e.args[0] if e.args else 'UNKNOWN'
+                    error_msg = e.args[1] if len(e.args) > 1 else str(e)
+                    logger.error(f"Programming error executing stored procedure")
+                    logger.error(f"Error Code: {error_code}")
+                    logger.error(f"Error Message: {error_msg}")
+                    logger.error(f"Candidate ID: {candidate_id}")
                     raise DatabaseQueryError(f"Database programming error: {e}") from e
                     
                 except pyodbc.DatabaseError as e:
-                    logger.error(f"Database error executing stored procedure: {e}")
+                    error_code = e.args[0] if e.args else 'UNKNOWN'
+                    error_msg = e.args[1] if len(e.args) > 1 else str(e)
+                    logger.error(f"Database error executing stored procedure")
+                    logger.error(f"Error Code: {error_code}")
+                    logger.error(f"Error Message: {error_msg}")
+                    logger.error(f"Candidate ID: {candidate_id}")
                     if _is_retryable_error(e):
                         raise DatabaseConnectionError(f"Transient database error: {e}") from e
                     raise DatabaseQueryError(f"Database error: {e}") from e
                     
                 except pyodbc.Error as e:
-                    logger.error(f"PyODBC error executing stored procedure: {e}")
+                    error_code = e.args[0] if e.args else 'UNKNOWN'
+                    error_msg = e.args[1] if len(e.args) > 1 else str(e)
+                    logger.error(f"PyODBC error executing stored procedure")
+                    logger.error(f"Error Code: {error_code}")
+                    logger.error(f"Error Message: {error_msg}")
+                    logger.error(f"Full exception: {repr(e)}")
+                    logger.error(f"Candidate ID: {candidate_id}")
                     if _is_retryable_error(e):
                         raise DatabaseConnectionError(f"Transient database error: {e}") from e
                     raise DatabaseQueryError(f"Database error: {e}") from e
                     
                 except Exception as e:
                     logger.error(f"Unexpected error executing stored procedure: {e}", exc_info=True)
+                    logger.error(f"Exception type: {type(e).__name__}")
+                    logger.error(f"Candidate ID: {candidate_id}")
                     raise DatabaseQueryError(f"Unexpected error: {e}") from e
+                
+                finally:
+                    # Ensure cursor is always closed
+                    if cursor is not None:
+                        try:
+                            cursor.close()
+                            logger.debug("Cursor closed successfully")
+                        except Exception as e:
+                            logger.warning(f"Error closing cursor: {e}")
             
             results = await loop.run_in_executor(None, _execute)
             return results
+        
+        finally:
+            # Return connection to pool
+            await db_pool.return_connection(conn)
     
     try:
         results = await _execute_with_retry()
@@ -287,7 +343,7 @@ async def execute_details_stored_procedure(
     logger.info(f"Executing details stored procedure for requirement_id={requirement_id}, source_id={source_id}")
     
     settings = get_settings()
-    db_pool = get_db_pool()
+    db_pool = await get_db_pool()
     loop = asyncio.get_event_loop()
     
     # Retry decorator for transient database errors
@@ -299,11 +355,15 @@ async def execute_details_stored_procedure(
     )
     async def _execute_with_retry():
         """Execute stored procedure with retry logic."""
-        async with db_pool.get_connection() as conn:
+        conn = await db_pool.get_connection()
+        try:
             def _execute():
                 """Internal function to execute stored procedure synchronously."""
+                cursor = None
                 try:
                     cursor = conn.cursor()
+                    
+                    logger.debug(f"Executing stored procedure USP_AI_Get_JobSeekerRecommenededJobDetails with requirement_id={requirement_id}, source_id={source_id}")
                     
                     cursor.execute(
                         """
@@ -316,16 +376,31 @@ async def execute_details_stored_procedure(
                     
                     results = []
                     
+                    # Process all result sets
+                    # Note: SQL Server stored procedures may raise HY000 on nextset() after the last result set
+                    # This is expected behavior and should be handled gracefully
                     while True:
                         if cursor.description:
+                            logger.debug(f"Processing result set with {len(cursor.description)} columns")
                             rows = cursor.fetchall()
+                            logger.debug(f"Fetched {len(rows)} rows from current result set")
                             for row in rows:
                                 results.append(_convert_row_to_dict(cursor, row))
                         
-                        if not cursor.nextset():
-                            break
-                    
-                    cursor.close()
+                        # Try to move to next result set
+                        # SQL Server may raise HY000 error here after the last result set
+                        try:
+                            if not cursor.nextset():
+                                break
+                        except pyodbc.Error as e:
+                            # HY000 error on nextset() after last result set is expected
+                            error_code = e.args[0] if e.args else None
+                            if error_code == 'HY000':
+                                logger.debug("Reached end of result sets (HY000 on nextset - expected)")
+                                break
+                            else:
+                                # Re-raise if it's a different error
+                                raise
                     
                     if not results:
                         logger.info(f"Details stored procedure returned no results for requirement_id={requirement_id}, source_id={source_id}")
@@ -335,33 +410,69 @@ async def execute_details_stored_procedure(
                     return results[0]  # Return first (and should be only) result
                     
                 except pyodbc.OperationalError as e:
-                    logger.warning(f"Operational error executing stored procedure: {e}")
+                    error_code = e.args[0] if e.args else 'UNKNOWN'
+                    error_msg = e.args[1] if len(e.args) > 1 else str(e)
+                    logger.error(f"Operational error executing stored procedure")
+                    logger.error(f"Error Code: {error_code}")
+                    logger.error(f"Error Message: {error_msg}")
+                    logger.error(f"Requirement ID: {requirement_id}, Source ID: {source_id}")
                     if _is_retryable_error(e):
                         raise DatabaseConnectionError(f"Transient database error: {e}") from e
                     raise DatabaseQueryError(f"Database operational error: {e}") from e
                     
                 except pyodbc.ProgrammingError as e:
-                    logger.error(f"Programming error executing stored procedure: {e}")
+                    error_code = e.args[0] if e.args else 'UNKNOWN'
+                    error_msg = e.args[1] if len(e.args) > 1 else str(e)
+                    logger.error(f"Programming error executing stored procedure")
+                    logger.error(f"Error Code: {error_code}")
+                    logger.error(f"Error Message: {error_msg}")
+                    logger.error(f"Requirement ID: {requirement_id}, Source ID: {source_id}")
                     raise DatabaseQueryError(f"Database programming error: {e}") from e
                     
                 except pyodbc.DatabaseError as e:
-                    logger.error(f"Database error executing stored procedure: {e}")
+                    error_code = e.args[0] if e.args else 'UNKNOWN'
+                    error_msg = e.args[1] if len(e.args) > 1 else str(e)
+                    logger.error(f"Database error executing stored procedure")
+                    logger.error(f"Error Code: {error_code}")
+                    logger.error(f"Error Message: {error_msg}")
+                    logger.error(f"Requirement ID: {requirement_id}, Source ID: {source_id}")
                     if _is_retryable_error(e):
                         raise DatabaseConnectionError(f"Transient database error: {e}") from e
                     raise DatabaseQueryError(f"Database error: {e}") from e
                     
                 except pyodbc.Error as e:
-                    logger.error(f"PyODBC error executing stored procedure: {e}")
+                    error_code = e.args[0] if e.args else 'UNKNOWN'
+                    error_msg = e.args[1] if len(e.args) > 1 else str(e)
+                    logger.error(f"PyODBC error executing stored procedure")
+                    logger.error(f"Error Code: {error_code}")
+                    logger.error(f"Error Message: {error_msg}")
+                    logger.error(f"Full exception: {repr(e)}")
+                    logger.error(f"Requirement ID: {requirement_id}, Source ID: {source_id}")
                     if _is_retryable_error(e):
                         raise DatabaseConnectionError(f"Transient database error: {e}") from e
                     raise DatabaseQueryError(f"Database error: {e}") from e
                     
                 except Exception as e:
                     logger.error(f"Unexpected error executing stored procedure: {e}", exc_info=True)
+                    logger.error(f"Exception type: {type(e).__name__}")
+                    logger.error(f"Requirement ID: {requirement_id}, Source ID: {source_id}")
                     raise DatabaseQueryError(f"Unexpected error: {e}") from e
+                
+                finally:
+                    # Ensure cursor is always closed
+                    if cursor is not None:
+                        try:
+                            cursor.close()
+                            logger.debug("Cursor closed successfully")
+                        except Exception as e:
+                            logger.warning(f"Error closing cursor: {e}")
             
             result = await loop.run_in_executor(None, _execute)
             return result
+        
+        finally:
+            # Return connection to pool
+            await db_pool.return_connection(conn)
     
     try:
         result = await _execute_with_retry()

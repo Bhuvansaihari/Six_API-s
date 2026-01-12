@@ -9,8 +9,6 @@ import pyodbc
 import asyncio
 from typing import Optional
 from contextlib import asynccontextmanager
-from queue import Queue, Empty
-import threading
 import logging
 from config import get_settings
 
@@ -55,11 +53,18 @@ def get_connection_string() -> str:
 
 class DatabasePool:
     """
-    Thread-safe database connection pool for SQL Server.
+    Async database connection pool for SQL Server.
     
     Manages a pool of pyodbc connections that can be reused across
-    async operations. Connections are created on-demand and cached
-    for reuse.
+    async operations. Connections are pre-initialized at startup
+    for better reliability and performance.
+    
+    Attributes:
+        connection_string (str): SQL Server connection string
+        pool_size (int): Maximum number of connections in the pool
+        _pool (list): List of available connections
+        _lock (asyncio.Lock): Lock for thread-safe operations
+        _initialized (bool): Whether the pool has been initialized
     """
     
     def __init__(
@@ -75,133 +80,208 @@ class DatabasePool:
         Args:
             connection_string (str): SQL Server connection string
             pool_size (int): Maximum number of connections in the pool
-            max_overflow (int): Maximum additional connections beyond pool_size
-            pool_timeout (int): Timeout in seconds for acquiring a connection
+            max_overflow (int): Maximum additional connections beyond pool_size (for compatibility)
+            pool_timeout (int): Timeout in seconds for acquiring a connection (for compatibility)
         """
         self.connection_string = connection_string
         self.pool_size = pool_size
-        self.max_overflow = max_overflow
-        self.pool_timeout = pool_timeout
-        self._pool: Queue = Queue(maxsize=pool_size + max_overflow)
-        self._created_connections = 0
-        self._lock = threading.Lock()
+        self.max_overflow = max_overflow  # Kept for compatibility
+        self.pool_timeout = pool_timeout  # Kept for compatibility
+        self._pool: list[pyodbc.Connection] = []
+        self._lock = asyncio.Lock()
+        self._initialized = False
         logger.info(f"Database pool initialized with size {pool_size}, max overflow {max_overflow}")
     
-    def _create_connection(self) -> pyodbc.Connection:
-        """Create a new database connection."""
-        try:
-            conn = pyodbc.connect(self.connection_string, timeout=10)
-            logger.debug("New database connection created")
-            return conn
-        except pyodbc.Error as e:
-            logger.error(f"Failed to create database connection: {e}")
-            raise
+    def _sanitize_connection_string(self, conn_str: str) -> str:
+        """Sanitize connection string for logging (remove password)."""
+        import re
+        return re.sub(r'PWD=([^;]+)', 'PWD=***', conn_str, flags=re.IGNORECASE)
     
-    def _is_connection_alive(self, conn: pyodbc.Connection) -> bool:
+    async def initialize(self):
+        """Initialize the connection pool by creating initial connections."""
+        if self._initialized:
+            return
+        
+        async with self._lock:
+            if self._initialized:
+                return
+            
+            logger.info(f"Initializing database pool with {self.pool_size} connections...")
+            logger.debug(f"Connection string: {self._sanitize_connection_string(self.connection_string)}")
+            
+            # Create initial connections
+            loop = asyncio.get_event_loop()
+            for i in range(self.pool_size):
+                try:
+                    conn = await loop.run_in_executor(
+                        None, 
+                        lambda: pyodbc.connect(self.connection_string, timeout=30)
+                    )
+                    self._pool.append(conn)
+                    logger.debug(f"Created connection {i+1}/{self.pool_size}")
+                except pyodbc.Error as e:
+                    error_code = e.args[0] if e.args else 'UNKNOWN'
+                    error_msg = e.args[1] if len(e.args) > 1 else str(e)
+                    logger.error(f"Failed to create database connection {i+1}/{self.pool_size}")
+                    logger.error(f"PyODBC Error Code: {error_code}")
+                    logger.error(f"PyODBC Error Message: {error_msg}")
+                    logger.error(f"Connection string: {self._sanitize_connection_string(self.connection_string)}")
+                    raise
+            
+            self._initialized = True
+            logger.info(f"Database pool initialized with {len(self._pool)} connections")
+    
+    async def _is_connection_alive(self, conn: pyodbc.Connection) -> bool:
         """Check if a database connection is still alive and usable."""
         try:
             if conn.closed:
+                logger.debug("Connection is closed")
                 return False
             
-            cursor = conn.cursor()
-            cursor.execute("SELECT 1")
-            cursor.fetchone()
-            cursor.close()
-            return True
+            loop = asyncio.get_event_loop()
+            
+            def _check():
+                cursor = conn.cursor()
+                cursor.execute("SELECT 1")
+                cursor.fetchone()
+                cursor.close()
+                return True
+            
+            result = await loop.run_in_executor(None, _check)
+            return result
         except (pyodbc.Error, AttributeError, Exception) as e:
             logger.debug(f"Connection health check failed: {e}")
             return False
     
-    def _get_connection(self) -> Optional[pyodbc.Connection]:
-        """Get a connection from the pool or create a new one."""
-        try:
-            conn = self._pool.get_nowait()
+    async def get_connection(self) -> pyodbc.Connection:
+        """
+        Get a connection from the pool.
+        
+        Returns:
+            pyodbc.Connection: A database connection from the pool
+        """
+        if not self._initialized:
+            await self.initialize()
+        
+        async with self._lock:
+            if self._pool:
+                conn = self._pool.pop()
+                logger.debug(f"Reusing connection from pool ({len(self._pool)} remaining)")
+                
+                # Verify connection is alive
+                if await self._is_connection_alive(conn):
+                    return conn
+                else:
+                    # Connection is dead, create a new one
+                    logger.warning("Dead connection detected, creating new connection")
+                    try:
+                        await asyncio.get_event_loop().run_in_executor(None, conn.close)
+                    except:
+                        pass
             
-            if self._is_connection_alive(conn):
-                logger.debug("Reusing existing connection from pool")
-                return conn
-            else:
-                try:
-                    conn.close()
-                except Exception:
-                    pass
-                logger.warning("Dead connection removed from pool, creating new one")
-                with self._lock:
-                    self._created_connections -= 1
-        except Empty:
-            pass
-        
-        with self._lock:
-            if self._created_connections < self.pool_size + self.max_overflow:
-                conn = self._create_connection()
-                self._created_connections += 1
-                logger.debug(f"Created new connection. Total: {self._created_connections}")
-                return conn
-        
-        return None
-    
-    def _return_connection(self, conn: pyodbc.Connection) -> None:
-        """Return a connection to the pool."""
-        try:
-            self._pool.put_nowait(conn)
-            logger.debug("Connection returned to pool")
-        except:
+            # If pool is exhausted or connection was dead, create a new connection
+            logger.debug("Pool exhausted or connection dead, creating new connection")
+            loop = asyncio.get_event_loop()
             try:
-                conn.close()
-                with self._lock:
-                    self._created_connections -= 1
-                logger.debug("Pool full, connection closed")
+                conn = await loop.run_in_executor(
+                    None,
+                    lambda: pyodbc.connect(self.connection_string, timeout=30)
+                )
+                return conn
+            except pyodbc.Error as e:
+                error_code = e.args[0] if e.args else 'UNKNOWN'
+                error_msg = e.args[1] if len(e.args) > 1 else str(e)
+                logger.error(f"Failed to create new database connection")
+                logger.error(f"PyODBC Error Code: {error_code}")
+                logger.error(f"PyODBC Error Message: {error_msg}")
+                raise
+    
+    async def return_connection(self, conn: pyodbc.Connection):
+        """
+        Return a connection to the pool.
+        
+        Checks if the connection is still alive before returning it.
+        If the connection is dead, creates a new one.
+        
+        Args:
+            conn (pyodbc.Connection): The connection to return to the pool
+        """
+        # Check if connection is still alive
+        is_alive = await self._is_connection_alive(conn)
+        
+        if not is_alive:
+            # Connection is dead, create a new one
+            logger.warning("Connection health check failed during return, creating new connection")
+            try:
+                await asyncio.get_event_loop().run_in_executor(None, conn.close)
             except:
                 pass
+            
+            try:
+                loop = asyncio.get_event_loop()
+                conn = await loop.run_in_executor(
+                    None,
+                    lambda: pyodbc.connect(self.connection_string, timeout=30)
+                )
+            except pyodbc.Error as e:
+                error_code = e.args[0] if e.args else 'UNKNOWN'
+                error_msg = e.args[1] if len(e.args) > 1 else str(e)
+                logger.error(f"Failed to recreate connection during return")
+                logger.error(f"PyODBC Error Code: {error_code}")
+                logger.error(f"PyODBC Error Message: {error_msg}")
+                # Don't raise, just don't return the connection to pool
+                return
+        
+        async with self._lock:
+            if len(self._pool) < self.pool_size:
+                self._pool.append(conn)
+                logger.debug(f"Connection returned to pool ({len(self._pool)} available)")
+            else:
+                # Pool is full, close the connection
+                try:
+                    await asyncio.get_event_loop().run_in_executor(None, conn.close)
+                    logger.debug("Pool full, connection closed")
+                except:
+                    pass
     
     @asynccontextmanager
-    async def get_connection(self):
+    async def get_connection_context(self):
         """
-        Async context manager for getting a database connection from the pool.
+        Context manager for getting a connection from the pool.
         
         Yields:
             pyodbc.Connection: A database connection from the pool
-        """
-        loop = asyncio.get_event_loop()
-        start_time = asyncio.get_event_loop().time()
-        conn = None
-        
-        while conn is None:
-            conn = await loop.run_in_executor(None, self._get_connection)
             
-            if conn is None:
-                elapsed = asyncio.get_event_loop().time() - start_time
-                if elapsed >= self.pool_timeout:
-                    raise TimeoutError(
-                        f"Failed to acquire connection from pool within {self.pool_timeout} seconds"
-                    )
-                await asyncio.sleep(0.1)
-        
+        Example:
+            >>> async with pool.get_connection_context() as conn:
+            ...     cursor = conn.cursor()
+            ...     cursor.execute("SELECT * FROM table")
+        """
+        conn = await self.get_connection()
         try:
             yield conn
         finally:
-            await loop.run_in_executor(None, self._return_connection, conn)
+            await self.return_connection(conn)
     
-    def close_all(self) -> None:
+    async def close_all(self):
         """Close all connections in the pool."""
-        logger.info("Closing all connections in pool")
-        while not self._pool.empty():
-            try:
-                conn = self._pool.get_nowait()
-                conn.close()
-            except:
-                pass
-        
-        with self._lock:
-            self._created_connections = 0
-        logger.info("All connections closed")
+        async with self._lock:
+            logger.info(f"Closing all {len(self._pool)} connections in pool")
+            for conn in self._pool:
+                try:
+                    await asyncio.get_event_loop().run_in_executor(None, conn.close)
+                except:
+                    pass
+            self._pool.clear()
+            self._initialized = False
+            logger.info("All database connections closed")
 
 
 # Global database pool instance
 _db_pool: Optional[DatabasePool] = None
 
 
-def get_db_pool() -> DatabasePool:
+async def get_db_pool() -> DatabasePool:
     """
     Get or create the global database pool instance.
     
@@ -220,6 +300,7 @@ def get_db_pool() -> DatabasePool:
                 max_overflow=settings.recommendations_db_max_overflow,
                 pool_timeout=settings.recommendations_db_pool_timeout
             )
+            await _db_pool.initialize()
             logger.info("Global database pool created")
         except Exception as e:
             logger.error(f"Failed to create database pool: {e}")
@@ -228,12 +309,13 @@ def get_db_pool() -> DatabasePool:
     return _db_pool
 
 
-def close_db_pool() -> None:
+async def close_db_pool() -> None:
     """Close the global database pool and all its connections."""
     global _db_pool
     
     if _db_pool is not None:
-        _db_pool.close_all()
+        await _db_pool.close_all()
         _db_pool = None
         logger.info("Global database pool closed")
+
 
