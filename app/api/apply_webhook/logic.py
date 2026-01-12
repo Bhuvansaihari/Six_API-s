@@ -6,6 +6,7 @@ from app.db.sql_server import SQLServerConnection
 from app.supabase.client import SupabaseClient
 from app.utils.retry_utils import retry_with_backoff
 from config import get_settings
+from app.constants import SIMILARITY_THRESHOLD, DEFAULT_DAILY_LIMIT
 
 logger = logging.getLogger(__name__)
 
@@ -56,10 +57,10 @@ class WebhookProcessingService:
             matching = CandJobMatching(**record)
             
             # Check similarity score condition
-            if matching.similarity_score is None or matching.similarity_score < 0.7:
+            if matching.similarity_score is None or matching.similarity_score < SIMILARITY_THRESHOLD:
                 return {
                     "success": False,
-                    "message": f"Similarity score {matching.similarity_score} is below threshold 0.7. Skipping stored procedure execution.",
+                    "message": f"Similarity score {matching.similarity_score} is below threshold {SIMILARITY_THRESHOLD}. Skipping stored procedure execution.",
                     "similarity_score": matching.similarity_score
                 }
             
@@ -110,7 +111,7 @@ class WebhookProcessingService:
                 }
             
             # Check daily application limit
-            daily_limit = preferences.get('daily_application_limit', 10)
+            daily_limit = preferences.get('daily_application_limit', DEFAULT_DAILY_LIMIT)
             limit_reached, applications_today = await check_daily_limit_reached(
                 matching.cand_id,
                 daily_limit
@@ -157,10 +158,15 @@ class WebhookProcessingService:
             # Remote preference filter
             # Treat missing flag as False (no preference)
             is_remote_preferred = bool(candidate_data.get("is_remote_preferred") or False)
+            
+            # Pay rate filter
+            # Get candidate's preferred minimum pay rate
+            candidate_min_payrate = candidate_data.get("Preferred_MinimumPayrate_PerHour")
 
+            # Prepare async tasks for parallel execution
+            remote_check_coro = None
             if is_remote_preferred:
-                # Get job's is_remote_location flag from parsed_requirements (async with retry)
-                is_remote_location = await retry_with_backoff(
+                remote_check_coro = retry_with_backoff(
                     asyncio.to_thread,
                     self.supabase.get_requirement_remote_flag,
                     matching.requirement_id,
@@ -170,10 +176,29 @@ class WebhookProcessingService:
                     exponential_base=settings.retry_exponential_base,
                 )
 
-                # Rule:
-                # - True  -> job is remote, proceed
-                # - False -> explicitly non-remote, skip
-                # - None  -> no info, proceed
+            payrate_check_coro = None
+            if candidate_min_payrate is not None:
+                payrate_check_coro = retry_with_backoff(
+                    asyncio.to_thread,
+                    self.supabase.get_requirement_min_payrate,
+                    matching.requirement_id,
+                    max_retries=settings.retry_max_attempts,
+                    initial_delay=settings.retry_initial_delay,
+                    max_delay=settings.retry_max_delay,
+                    exponential_base=settings.retry_exponential_base,
+                )
+
+            # Execute enabled checks in parallel
+            # Use asyncio.sleep(0) as placeholder for skipped tasks to maintain index alignment
+            check_results = await asyncio.gather(
+                remote_check_coro if remote_check_coro else asyncio.sleep(0),
+                payrate_check_coro if payrate_check_coro else asyncio.sleep(0)
+            )
+
+            # Process Remote Check Result
+            if is_remote_preferred:
+                is_remote_location = check_results[0]
+                # Rule: True -> remote, False -> non-remote, None -> unknown
                 if is_remote_location is False:
                     logger.info(
                         f"Skipping apply for cand_id={matching.cand_id}, requirement_id={matching.requirement_id} "
@@ -186,28 +211,11 @@ class WebhookProcessingService:
                         "requirement_id": matching.requirement_id,
                         "similarity_score": matching.similarity_score,
                     }
-            
-            # --- Pay rate filter ---
-            # Get candidate's preferred minimum pay rate
-            candidate_min_payrate = candidate_data.get("Preferred_MinimumPayrate_PerHour")
-            
-            # Only check if candidate has a preference
+
+            # Process Payrate Check Result
             if candidate_min_payrate is not None:
-                # Get job's minimum pay rate from parsed_requirements (async with retry)
-                job_min_payrate = await retry_with_backoff(
-                    asyncio.to_thread,
-                    self.supabase.get_requirement_min_payrate,
-                    matching.requirement_id,
-                    max_retries=settings.retry_max_attempts,
-                    initial_delay=settings.retry_initial_delay,
-                    max_delay=settings.retry_max_delay,
-                    exponential_base=settings.retry_exponential_base,
-                )
-                
-                # Rule:
-                # - If job_min_payrate is None -> no info, proceed (apply)
-                # - If job_min_payrate < candidate_min_payrate -> skip
-                # - If job_min_payrate >= candidate_min_payrate -> proceed
+                job_min_payrate = check_results[1]
+                # Rule: Skip if job pay < candidate preference
                 if job_min_payrate is not None and job_min_payrate < candidate_min_payrate:
                     logger.info(
                         f"Skipping apply for cand_id={matching.cand_id}, requirement_id={matching.requirement_id} "

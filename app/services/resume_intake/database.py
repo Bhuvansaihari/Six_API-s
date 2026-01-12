@@ -9,6 +9,8 @@ from datetime import datetime
 from supabase import create_client, Client
 
 from config import get_settings
+from app.utils.data_helpers import safe_get_dict, safe_get_list
+from app.utils.filename_utils import generate_candidate_filename
 
 logger = logging.getLogger(__name__)
 
@@ -94,14 +96,8 @@ class DatabaseService:
         if not candidate_id:
             raise ValueError("candidate_id is required")
         
-        # Helper function to safely get dict value
-        def safe_get_dict(value, default=None):
-            if isinstance(value, str):
-                try:
-                    return json.loads(value)
-                except:
-                    return default if default is not None else {}
-            return value if isinstance(value, dict) else (default if default is not None else {})
+        
+
         
         # Extract from canonical schema
         basic_info = safe_get_dict(resume_json.get('basic_information'), {})
@@ -183,27 +179,16 @@ class DatabaseService:
                 first_name = update_data.get('first_name', '').strip()
                 last_name = update_data.get('last_name', '').strip()
                 
-                # Create filename from candidate name
-                if first_name and last_name:
-                    # Sanitize names for filename (remove special characters)
-                    safe_first = ''.join(c for c in first_name if c.isalnum() or c in (' ', '-', '_')).strip().replace(' ', '_')
-                    safe_last = ''.join(c for c in last_name if c.isalnum() or c in (' ', '-', '_')).strip().replace(' ', '_')
-                    candidate_name = f"{safe_first}_{safe_last}"
-                elif first_name:
-                    safe_first = ''.join(c for c in first_name if c.isalnum() or c in (' ', '-', '_')).strip().replace(' ', '_')
-                    candidate_name = safe_first
-                elif last_name:
-                    safe_last = ''.join(c for c in last_name if c.isalnum() or c in (' ', '-', '_')).strip().replace(' ', '_')
-                    candidate_name = safe_last
-                else:
-                    # Fallback to candidate_id if no name available
-                    candidate_name = f"candidate_{candidate_id}"
-                
                 # Get file extension from original file
                 file_extension = os.path.splitext(resume_file_path)[1].lower()  # e.g., '.pdf'
                 
-                # Create new filename
-                new_filename = f"{candidate_name}{file_extension}"
+                # Generate safe filename using utility
+                new_filename = generate_candidate_filename(
+                    first_name, 
+                    last_name, 
+                    candidate_id, 
+                    file_extension
+                )
                 
                 # Store file metadata
                 file_size = os.path.getsize(resume_file_path)
@@ -298,22 +283,7 @@ class DatabaseService:
                 return None
             return value
         
-        # Helper function to safely get dict value
-        def safe_get_dict(value, default=None):
-            if isinstance(value, str):
-                try:
-                    return json.loads(value)
-                except:
-                    return default if default is not None else {}
-            return value if isinstance(value, dict) else (default if default is not None else {})
-        
-        def safe_get_list(value, default=None):
-            if isinstance(value, str):
-                try:
-                    return json.loads(value)
-                except:
-                    return default if default is not None else []
-            return value if isinstance(value, list) else (default if default is not None else [])
+
         
         # Extract from canonical schema
         basic = safe_get_dict(resume_data.get('basic_information'), {})

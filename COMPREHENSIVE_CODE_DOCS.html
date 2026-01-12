@@ -1,0 +1,478 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Auto-Apply System - Complete Documentation</title>
+    <style>
+        :root {
+            --primary: #2563eb;
+            --primary-dark: #1e40af;
+            --text: #1f2937;
+            --text-light: #6b7280;
+            --bg: #f3f4f6;
+            --sidebar-bg: #111827;
+            --sidebar-text: #e5e7eb;
+            --card-bg: #ffffff;
+            --border: #e5e7eb;
+            --code-bg: #f8fafc;
+            --method-get: #059669;
+            --method-post: #2563eb;
+            --method-delete: #dc2626;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            margin: 0;
+            background-color: var(--bg);
+            color: var(--text);
+            display: flex;
+            min-height: 100vh;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 280px;
+            background-color: var(--sidebar-bg);
+            color: var(--sidebar-text);
+            padding: 20px;
+            position: fixed;
+            height: 100vh;
+            overflow-y: auto;
+            flex-shrink: 0;
+        }
+
+        .sidebar h2 {
+            font-size: 1.2rem;
+            color: #fff;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid #374151;
+        }
+
+        .nav-group {
+            margin-bottom: 24px;
+        }
+
+        .nav-title {
+            text-transform: uppercase;
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: #9ca3af;
+            margin-bottom: 8px;
+            letter-spacing: 0.05em;
+        }
+
+        .nav-link {
+            display: block;
+            color: #d1d5db;
+            text-decoration: none;
+            padding: 6px 10px;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            transition: all 0.2s;
+        }
+
+        .nav-link:hover {
+            background-color: #374151;
+            color: #fff;
+        }
+
+        /* Main Content */
+        .main-content {
+            flex: 1;
+            margin-left: 280px;
+            padding: 40px 60px;
+            max-width: 1200px;
+        }
+
+        h1 {
+            font-size: 2.25rem;
+            margin-bottom: 30px;
+            color: #111827;
+        }
+
+        h2 {
+            font-size: 1.75rem;
+            margin-top: 50px;
+            margin-bottom: 20px;
+            border-bottom: 2px solid var(--border);
+            padding-bottom: 10px;
+        }
+
+        h3 {
+            font-size: 1.35rem;
+            margin-top: 30px;
+            margin-bottom: 15px;
+            color: #374151;
+        }
+
+        h4 {
+            font-size: 1.1rem;
+            margin-top: 20px;
+            color: #4b5563;
+        }
+
+        .card {
+            background: var(--card-bg);
+            border-radius: 12px;
+            padding: 25px;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+            margin-bottom: 24px;
+        }
+
+        .endpoint-badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-weight: 700;
+            font-size: 0.8rem;
+            text-transform: uppercase;
+            color: white;
+            margin-right: 10px;
+            min-width: 60px;
+            text-align: center;
+        }
+
+        .get {
+            background-color: var(--method-get);
+        }
+
+        .post {
+            background-color: var(--method-post);
+        }
+
+        .delete {
+            background-color: var(--method-delete);
+        }
+
+        .api-path {
+            font-family: 'Monaco', monospace;
+            font-weight: 600;
+            font-size: 1.1rem;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 15px 0;
+            font-size: 0.95rem;
+        }
+
+        th {
+            text-align: left;
+            background-color: #f9fafb;
+            padding: 12px;
+            border-bottom: 2px solid var(--border);
+        }
+
+        td {
+            padding: 12px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        tr:last-child td {
+            border-bottom: none;
+        }
+
+        pre {
+            background-color: #1e293b;
+            color: #e2e8f0;
+            padding: 20px;
+            border-radius: 8px;
+            overflow-x: auto;
+            font-family: 'Consolas', monospace;
+            font-size: 0.9rem;
+        }
+
+        .note {
+            background-color: #eff6ff;
+            border-left: 4px solid var(--primary);
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 4px;
+            color: #1e40af;
+        }
+    </style>
+</head>
+
+<body>
+
+    <nav class="sidebar">
+        <h2>Auto-Apply Sys</h2>
+
+        <div class="nav-group">
+            <div class="nav-title">System</div>
+            <a href="#architecture" class="nav-link">Architecture Overview</a>
+            <a href="#database" class="nav-link">Database Schema</a>
+            <a href="#config" class="nav-link">Configuration</a>
+        </div>
+
+        <div class="nav-group">
+            <div class="nav-title">Resume APIs</div>
+            <a href="#resume-intake" class="nav-link">Resume Intake</a>
+        </div>
+
+        <div class="nav-group">
+            <div class="nav-title">Core Features</div>
+            <a href="#apply-webhook" class="nav-link">Apply Webhook</a>
+            <a href="#recommendations" class="nav-link">Recommendations</a>
+            <a href="#req-details" class="nav-link">Requirement Details</a>
+            <a href="#manual-apply" class="nav-link">Manual Apply</a>
+        </div>
+
+        <div class="nav-group">
+            <div class="nav-title">Agents & Sync</div>
+            <a href="#outreach" class="nav-link">Outreach Agent</a>
+            <a href="#candidate-sync" class="nav-link">Candidate Sync</a>
+        </div>
+
+        <div class="nav-group">
+            <div class="nav-title">Internal Services</div>
+            <a href="#preferences" class="nav-link">Preferences & Limits</a>
+            <a href="#utilities" class="nav-link">Shared Utilities</a>
+        </div>
+    </nav>
+
+    <div class="main-content">
+        <h1>Codebase Documentation</h1>
+        <p>Comprehensive reference for the Auto-Apply System microservices.</p>
+
+        <section id="architecture">
+            <h2>System Architecture</h2>
+            <div class="card">
+                <p>The system interacts with two primary databases and exposes 7 REST API modules.</p>
+                <h3>Storage Layer</h3>
+                <ul>
+                    <li><strong>Supabase (PostgreSQL)</strong>: Handling unstructured data, candidate profiles
+                        (<code>auto_apply_cand</code>), webhook configurations, and application logging.</li>
+                    <li><strong>Azure SQL Server</strong>: Executing complex business logic via Stored Procedures for
+                        Job Matching, Application Submission, and Recommendations.</li>
+                </ul>
+                <h3>Application Layer</h3>
+                <ul>
+                    <li><strong>FastAPI</strong>: Asynchronous web framework.</li>
+                    <li><strong>Asyncio</strong>: Used for parallel IO operations (e.g., checking multiple listing
+                        details concurrently).</li>
+                </ul>
+            </div>
+        </section>
+
+        <!-- RESUME INTAKE -->
+        <section id="resume-intake">
+            <h2>Resume Intake Module</h2>
+            <p><code>app/api/resume_intake/*</code></p>
+
+            <div class="card">
+                <h3><span class="endpoint-badge post">POST</span> <span
+                        class="api-path">/resume-intake/process-resume</span></h3>
+                <p><strong>Method:</strong> <code>process_resume_endpoint</code></p>
+                <p>Uploads and parses a resume file (PDF/DOCX/TXT).</p>
+
+                <h4>Flow:</h4>
+                <ol>
+                    <li>Hashes file content for caching (Key: <code>resume:{id}:{hash}</code>).</li>
+                    <li>Extracts text from file.</li>
+                    <li>Uses LLM (GPT-4o) to structure data into JSON.</li>
+                    <li><strong>Filename Normalization:</strong> Sanitizes filename to
+                        <code>FirstName_LastName.pdf</code>.</li>
+                    <li>Updates <code>auto_apply_cand</code> and <code>parsed_cand_resume</code> in Supabase.</li>
+                    <li>Generates vector embeddings (Qdrant) for search.</li>
+                </ol>
+
+                <h4>Parameters:</h4>
+                <table>
+                    <tr>
+                        <th>Param</th>
+                        <th>Type</th>
+                        <th>Description</th>
+                    </tr>
+                    <tr>
+                        <td>file</td>
+                        <td>UploadFile</td>
+                        <td>The resume file (PDF, DOCX, TXT)</td>
+                    </tr>
+                    <tr>
+                        <td>candidate_id</td>
+                        <td>int</td>
+                        <td>Target Candidate ID</td>
+                    </tr>
+                </table>
+            </div>
+
+            <div class="card">
+                <h3><span class="endpoint-badge get">GET</span> <span class="api-path">/resume-intake/cache/stats</span>
+                </h3>
+                <p>Returns memory cache statistics (hits, misses, size).</p>
+            </div>
+        </section>
+
+        <!-- APPLY WEBHOOK -->
+        <section id="apply-webhook">
+            <h2>Apply Webhook Module</h2>
+            <p><code>app/api/apply_webhook/*</code></p>
+
+            <div class="card">
+                <h3><span class="endpoint-badge post">POST</span> <span
+                        class="api-path">/webhook/cand-job-matching</span></h3>
+                <p><strong>Method:</strong> <code>webhook_listener</code></p>
+                <p>Core endpoint triggered by Supabase when a candidate matches a job.</p>
+
+                <h4>Business Logic (Ordered):</h4>
+                <ol>
+                    <li><strong>Validation:</strong> Checks payload type (<code>INSERT</code>) and table
+                        (<code>cand_job_matching</code>).</li>
+                    <li><strong>Similarity Gate:</strong> Returns immediately if <code>similarity_score < 0.7</code>.
+                    </li>
+                    <li><strong>Deduplication:</strong> Checks if application already exists in
+                        <code>job_application_tracking</code>.</li>
+                    <li><strong>Active Check:</strong> Verifies <code>is_active</code> flag in
+                        <code>auto_apply_agent_preferences</code>.</li>
+                    <li><strong>Daily Limit:</strong> Enforces <code>daily_application_limit</code> (Default: 10). Count
+                        is <em>not cached</em> for safety.</li>
+                    <li><strong>Parallel Filtering (Async):</strong>
+                        <ul>
+                            <li>Fetches <code>is_remote_preferred</code> → Checks job <code>is_remote_location</code>.
+                            </li>
+                            <li>Fetches <code>Preferred_MinimumPayrate_PerHour</code> → Checks job
+                                <code>MinPayRate</code>.</li>
+                            <li><em>(Runs concurrently via asyncio.gather)</em></li>
+                        </ul>
+                    </li>
+                    <li><strong>Execution:</strong> Calls SQL SP <code>Usp_SC_JobSeeker_IU_ApplyJob</code>.</li>
+                    <li><strong>Logging:</strong> Inserts record into <code>job_application_tracking</code>.</li>
+                </ol>
+            </div>
+        </section>
+
+        <!-- RECOMMENDATIONS -->
+        <section id="recommendations">
+            <h2>Recommendations Module</h2>
+            <p><code>app/api/recommendations/*</code></p>
+
+            <div class="card">
+                <h3><span class="endpoint-badge get">GET</span> <span class="api-path">/api/recommendations</span></h3>
+                <p>Executes <code>USP_AI_Get_JobSeekerRecommenededJobList</code>.</p>
+                <p class="note">Uses a custom Async Connection Pool to handle SQL Server connections efficiently.</p>
+            </div>
+
+            <div class="card">
+                <h3><span class="endpoint-badge get">GET</span> <span
+                        class="api-path">/api/recommendations/{requirement_id}</span></h3>
+                <p>Executes <code>USP_AI_Get_JobSeekerRecommenededJobDetails</code> to get full job description.</p>
+            </div>
+        </section>
+
+        <!-- REQ DETAILS -->
+        <section id="req-details">
+            <h2>Requirement Details Module</h2>
+            <p><code>app/api/requirement_details/*</code></p>
+
+            <div class="card">
+                <h3><span class="endpoint-badge get">GET</span> <span
+                        class="api-path">/api/requirement/{requirement_id}</span></h3>
+                <p>Fetches job details via <code>Beta_usp_Get_Requirement_Details</code>.</p>
+                <ul>
+                    <li><strong>Caching:</strong> 5-minute TTL.</li>
+                    <li><strong>Rate Limit:</strong> Applied via <code>slowapi</code>.</li>
+                </ul>
+            </div>
+        </section>
+
+        <!-- MANUAL APPLY -->
+        <section id="manual-apply">
+            <h2>Manual Apply Module</h2>
+            <p><code>app/api/manual_apply/*</code></p>
+
+            <div class="card">
+                <h3><span class="endpoint-badge post">POST</span> <span class="api-path">/apply-job</span></h3>
+                <p>Allows manual application triggering. Bypasses similarity and daily limit checks.</p>
+            </div>
+        </section>
+
+        <!-- OUTREACH AGENT -->
+        <section id="outreach">
+            <h2>Outreach Agent Module</h2>
+            <p><code>app/api/outreach_agent/*</code></p>
+
+            <div class="card">
+                <h3><span class="endpoint-badge post">POST</span> <span
+                        class="api-path">/webhook/outreach/job-match</span></h3>
+                <p>Triggered when an application is created. Sends notifications.</p>
+                <ul>
+                    <li><strong>Channels:</strong> Email (SendGrid), SMS (Twilio).</li>
+                    <li><strong>Template:</strong> HTML email with job details.</li>
+                    <li><strong>Concurrency:</strong> Uses <code>asyncio.Semaphore</code> to limit parallel
+                        notifications.</li>
+                </ul>
+            </div>
+        </section>
+
+        <!-- CANDIDATE SYNC -->
+        <section id="candidate-sync">
+            <h2>Candidate Sync Module</h2>
+            <p><code>app/api/candidate_sync/*</code></p>
+
+            <div class="card">
+                <h3><span class="endpoint-badge post">POST</span> <span class="api-path">/candidate-sync</span></h3>
+                <p>Syncs candidate data between SQL Server and Supabase based on email.</p>
+            </div>
+        </section>
+
+        <!-- INTERNAL SERVICES -->
+        <section id="preferences">
+            <h2>Internal: Preferences Service</h2>
+            <p><code>app/services/auto_apply_preferences/preferences_service.py</code></p>
+
+            <div class="card">
+                <h3>Key Functions</h3>
+                <ul>
+                    <li><code>get_candidate_preferences(cand_id)</code>: Fetches prefs, creates default if missing.
+                        Cached.</li>
+                    <li><code>check_daily_limit_reached(cand_id, limit)</code>: Queries DB for today's count.
+                        <strong>Not Cached</strong>.</li>
+                    <li><code>create_default_preferences(cand_id)</code>: Sets default limit (10) and active status
+                        (True).</li>
+                </ul>
+            </div>
+        </section>
+
+        <section id="utilities">
+            <h2>Internal: Shared Utilities</h2>
+            <p><code>app/utils/*</code></p>
+
+            <div class="card">
+                <h3>Data Helpers</h3>
+                <p><code>data_helpers.py</code>: Safe extraction of dicts/lists from JSON strings.</p>
+
+                <h3>Filename Utils</h3>
+                <p><code>filename_utils.py</code>: Sanitizes candidate names for storage.</p>
+                <pre>John Doe -> John_Doe.pdf</pre>
+
+                <h3>Retry Utils</h3>
+                <p><code>retry_utils.py</code>: Exponential backoff decorator for unstable DB connections.</p>
+            </div>
+        </section>
+
+        <section id="config">
+            <h2>Configuration & Constants</h2>
+            <div class="card">
+                <h3>Constants (app/constants.py)</h3>
+                <pre>
+SIMILARITY_THRESHOLD = 0.7
+DEFAULT_DAILY_LIMIT = 10
+CACHE_TTL_PREFERENCES = 300  # 5 minutes
+            </pre>
+            </div>
+        </section>
+
+    </div>
+
+</body>
+
+</html>

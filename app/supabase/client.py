@@ -6,6 +6,7 @@ from datetime import date
 
 from supabase import create_client, Client
 from config import get_settings
+from app.constants import DEFAULT_DAILY_LIMIT
 
 logger = logging.getLogger(__name__)
 
@@ -255,7 +256,7 @@ class SupabaseClient:
         try:
             preferences_data = {
                 "cand_id": cand_id,
-                "daily_application_limit": 10,
+                "daily_application_limit": DEFAULT_DAILY_LIMIT,
                 "apply_most_recent_jobs_first": True,
                 "is_active": True
             }

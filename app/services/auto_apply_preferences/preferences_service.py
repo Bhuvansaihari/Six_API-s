@@ -9,6 +9,7 @@ import logging
 from typing import Optional, Dict, Tuple
 from datetime import datetime, timezone
 from app.supabase.client import SupabaseClient
+from app.constants import DEFAULT_DAILY_LIMIT
 from .cache import get_cached_preferences, set_cached_preferences
 
 logger = logging.getLogger(__name__)
@@ -112,7 +113,7 @@ def create_default_preferences(cand_id: int) -> Dict:
     
     logger.info(
         f"Created default preferences for cand_id={cand_id}: "
-        f"limit={preferences.get('daily_application_limit', 10)}, "
+        f"limit={preferences.get('daily_application_limit', DEFAULT_DAILY_LIMIT)}, "
         f"is_active={preferences.get('is_active', True)}"
     )
     
