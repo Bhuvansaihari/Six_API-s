@@ -179,17 +179,46 @@ class DatabaseService:
         # File information
         if os.path.exists(resume_file_path):
             try:
+                # Generate candidate-based filename
+                first_name = update_data.get('first_name', '').strip()
+                last_name = update_data.get('last_name', '').strip()
+                
+                # Create filename from candidate name
+                if first_name and last_name:
+                    # Sanitize names for filename (remove special characters)
+                    safe_first = ''.join(c for c in first_name if c.isalnum() or c in (' ', '-', '_')).strip().replace(' ', '_')
+                    safe_last = ''.join(c for c in last_name if c.isalnum() or c in (' ', '-', '_')).strip().replace(' ', '_')
+                    candidate_name = f"{safe_first}_{safe_last}"
+                elif first_name:
+                    safe_first = ''.join(c for c in first_name if c.isalnum() or c in (' ', '-', '_')).strip().replace(' ', '_')
+                    candidate_name = safe_first
+                elif last_name:
+                    safe_last = ''.join(c for c in last_name if c.isalnum() or c in (' ', '-', '_')).strip().replace(' ', '_')
+                    candidate_name = safe_last
+                else:
+                    # Fallback to candidate_id if no name available
+                    candidate_name = f"candidate_{candidate_id}"
+                
+                # Get file extension from original file
+                file_extension = os.path.splitext(resume_file_path)[1].lower()  # e.g., '.pdf'
+                
+                # Create new filename
+                new_filename = f"{candidate_name}{file_extension}"
+                
+                # Store file metadata
                 file_size = os.path.getsize(resume_file_path)
                 update_data['resume_file_size'] = file_size
-                update_data['resume_file_name'] = os.path.basename(resume_file_path)
-                file_extension = os.path.splitext(resume_file_path)[1].lower().replace('.', '')
-                update_data['resume_file_type'] = file_extension
-                update_data['resume_storage_path'] = resume_file_path
+                update_data['resume_file_name'] = new_filename  # e.g., 'John_Doe.pdf'
+                update_data['resume_file_type'] = file_extension.replace('.', '')  # e.g., 'pdf'
+                update_data['resume_storage_path'] = resume_file_path  # Keep original path
                 update_data['resume_upload_date'] = datetime.utcnow().isoformat()
+                
+                logger.info(f"Resume filename set to: {new_filename} for candidate_id={candidate_id}")
             except Exception as e:
                 raise Exception(f"Failed to read file: {str(e)}")
         else:
             raise FileNotFoundError(f"File not found at {resume_file_path}")
+
         
         # Upsert auto_apply_cand table (insert if not exists, update if exists)
         try:
