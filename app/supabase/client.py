@@ -183,6 +183,124 @@ class SupabaseClient:
         except Exception as e:
             logger.error(f"Error inserting application tracking record: {str(e)}")
             raise
+    
+    def get_candidate_preferences(self, cand_id: int) -> Optional[dict]:
+        """
+        Get candidate preferences from auto_apply_agent_preferences table.
+        
+        Args:
+            cand_id: Candidate ID
+            
+        Returns:
+            Preferences record or None if not found
+        """
+        try:
+            response = self.client.table("auto_apply_agent_preferences").select(
+                "agent_pref_id, cand_id, daily_application_limit, job_keywords, "
+                "apply_most_recent_jobs_first, is_active, created_at, updated_at"
+            ).eq("cand_id", cand_id).execute()
+            
+            if response.data and len(response.data) > 0:
+                return response.data[0]
+            return None
+        except Exception as e:
+            logger.error(f"Error fetching preferences for cand_id {cand_id}: {str(e)}")
+            raise
+    
+    def get_todays_application_count(self, cand_id: int) -> int:
+        """
+        Count applications made today from job_application_tracking.
+        
+        Uses UTC timezone for consistency.
+        
+        Args:
+            cand_id: Candidate ID
+            
+        Returns:
+            Number of applications made today
+        """
+        try:
+            from datetime import datetime, timezone
+            
+            # Get today's date in UTC
+            today_start = datetime.now(timezone.utc).replace(
+                hour=0, minute=0, second=0, microsecond=0
+            ).isoformat()
+            
+            # Count applications created today
+            response = self.client.table("job_application_tracking").select(
+                "application_id",
+                count="exact"
+            ).eq("cand_id", cand_id).gte(
+                "created_at", today_start
+            ).execute()
+            
+            return response.count if response.count is not None else 0
+        except Exception as e:
+            logger.error(f"Error counting today's applications for cand_id {cand_id}: {str(e)}")
+            raise
+    
+    def create_default_preferences(self, cand_id: int) -> dict:
+        """
+        Create default preferences for a candidate.
+        
+        Uses upsert to handle race conditions.
+        
+        Args:
+            cand_id: Candidate ID
+            
+        Returns:
+            Created preferences record
+        """
+        try:
+            preferences_data = {
+                "cand_id": cand_id,
+                "daily_application_limit": 10,
+                "apply_most_recent_jobs_first": True,
+                "is_active": True
+            }
+            
+            # Use upsert to handle race conditions
+            response = self.client.table("auto_apply_agent_preferences").upsert(
+                preferences_data,
+                on_conflict="cand_id"
+            ).execute()
+            
+            if response.data and len(response.data) > 0:
+                logger.info(f"Default preferences created for cand_id={cand_id}")
+                return response.data[0]
+            
+            logger.warning(f"Failed to create default preferences for cand_id={cand_id}")
+            return preferences_data  # Return the data we tried to insert
+        except Exception as e:
+            logger.error(f"Error creating default preferences for cand_id {cand_id}: {str(e)}")
+            raise
+    
+    def check_existing_application(self, cand_id: int, requirement_id: str) -> Optional[dict]:
+        """
+        Check if an application already exists for this candidate and job.
+        
+        Args:
+            cand_id: Candidate ID
+            requirement_id: Requirement ID
+            
+        Returns:
+            Existing application record or None
+        """
+        try:
+            response = self.client.table("job_application_tracking").select(
+                "application_id, application_status, created_at"
+            ).eq("cand_id", cand_id).eq("requirement_id", requirement_id).execute()
+            
+            if response.data and len(response.data) > 0:
+                return response.data[0]
+            return None
+        except Exception as e:
+            logger.error(
+                f"Error checking existing application for cand_id {cand_id}, "
+                f"requirement_id {requirement_id}: {str(e)}"
+            )
+            raise
 
 
 class SupabaseRepository:

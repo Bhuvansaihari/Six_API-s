@@ -65,6 +65,77 @@ class WebhookProcessingService:
             
             logger.info(f"Processing match with similarity_score {matching.similarity_score} for cand_id={matching.cand_id}, requirement_id={matching.requirement_id}")
             
+            # Check if application already exists (prevents duplicate + saves limit)
+            existing_app = await retry_with_backoff(
+                asyncio.to_thread,
+                self.supabase.check_existing_application,
+                matching.cand_id,
+                matching.requirement_id,
+                max_retries=settings.retry_max_attempts,
+                initial_delay=settings.retry_initial_delay,
+                max_delay=settings.retry_max_delay,
+                exponential_base=settings.retry_exponential_base
+            )
+            
+            if existing_app:
+                logger.info(
+                    f"Application already exists for cand_id={matching.cand_id}, "
+                    f"requirement_id={matching.requirement_id}, "
+                    f"application_id={existing_app.get('application_id')}"
+                )
+                return {
+                    "success": False,
+                    "message": "Application already exists for this job",
+                    "reason": "duplicate_application",
+                    "cand_id": matching.cand_id,
+                    "requirement_id": matching.requirement_id,
+                    "existing_application_id": existing_app.get('application_id'),
+                    "existing_status": existing_app.get('application_status')
+                }
+            
+            # Get candidate preferences (creates default if not exists)
+            from app.services.auto_apply_preferences import get_candidate_preferences, check_daily_limit_reached
+            
+            preferences = await get_candidate_preferences(matching.cand_id)
+            
+            # Check if auto-apply is active for this candidate
+            if not preferences.get('is_active', True):
+                logger.info(f"Auto-apply is disabled for cand_id={matching.cand_id}")
+                return {
+                    "success": False,
+                    "message": "Auto-apply is disabled for this candidate",
+                    "reason": "auto_apply_disabled",
+                    "cand_id": matching.cand_id,
+                    "requirement_id": matching.requirement_id
+                }
+            
+            # Check daily application limit
+            daily_limit = preferences.get('daily_application_limit', 10)
+            limit_reached, applications_today = await check_daily_limit_reached(
+                matching.cand_id,
+                daily_limit
+            )
+            
+            if limit_reached:
+                logger.info(
+                    f"Daily limit reached for cand_id={matching.cand_id}: "
+                    f"{applications_today}/{daily_limit} applications today"
+                )
+                return {
+                    "success": False,
+                    "message": f"Daily application limit reached ({applications_today}/{daily_limit})",
+                    "reason": "daily_limit_reached",
+                    "cand_id": matching.cand_id,
+                    "requirement_id": matching.requirement_id,
+                    "daily_limit": daily_limit,
+                    "applications_today": applications_today
+                }
+            
+            logger.info(
+                f"Daily limit check passed for cand_id={matching.cand_id}: "
+                f"{applications_today}/{daily_limit} applications today"
+            )
+            
             # Fetch candidate data from auto_apply_cand table (async with retry)
             candidate_data = await retry_with_backoff(
                 asyncio.to_thread,
