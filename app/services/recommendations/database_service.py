@@ -58,7 +58,12 @@ def _map_list_result_keys(result: Dict[str, Any]) -> Dict[str, Any]:
         "RequirementID": "requirement_id",
         "JobTitleText": "job_title",
         "Location": "location",
-        "SourceID": "source_id"
+        "SourceID": "source_id",
+        "JobTypeText": "job_type",
+        "ClientName": "client_name",
+        "CreatedDate": "created_at",
+        "PayRateToCandidate": "pay_rate",
+        "TotalCount": "total_count"
     }
     
     mapped_result = {}

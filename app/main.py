@@ -23,8 +23,10 @@ from app.api.recommendations.router import router as recommendations_router
 from app.api.requirement_details.router import router as requirement_details_router
 from app.api.outreach_agent.router import router as outreach_agent_router
 from app.api.manual_apply.router import router as manual_apply_router
+from app.api.job_list.router import router as job_list_router
 # TEMPORARY TEST ENDPOINT - Can be safely deleted later
 from app.api.resume_test.router import router as resume_test_router
+
 
 
 @asynccontextmanager
@@ -100,6 +102,10 @@ async def lifespan(app: FastAPI):
         logging.warning(f"Requirement Details API: Database pool initialization failed: {e}")
         logging.warning("Requirement Details API will not be available without database configuration")
 
+    # Initialize rate limiter for Job List API
+    app.state.job_list_limiter = Limiter(key_func=get_remote_address)
+    logging.info("Job List API: Rate limiter initialized")
+
     # Initialize semaphore for Outreach Agent V1 API
     app.state.outreach_agent_semaphore = asyncio.Semaphore(settings.outreach_agent_max_concurrent_tasks)
     logging.info(f"Outreach Agent API: Semaphore initialized (max_concurrent_tasks={settings.outreach_agent_max_concurrent_tasks})")
@@ -165,6 +171,7 @@ app.include_router(recommendations_router)
 app.include_router(requirement_details_router)
 app.include_router(outreach_agent_router)
 app.include_router(manual_apply_router)
+app.include_router(job_list_router, prefix="/api")
 # TEMPORARY TEST ENDPOINT - Can be safely deleted later
 app.include_router(resume_test_router)
 
