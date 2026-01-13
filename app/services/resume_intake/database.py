@@ -404,8 +404,9 @@ class DatabaseService:
                 # If insert fails due to unique constraint or existing record, try update
                 if any(keyword in error_str for keyword in ["unique", "duplicate", "violates", "already exists", "constraint"]):
                     try:
-                        # Remove cand_id and parsed_at from update_data for update (they shouldn't be updated)
-                        update_data_for_update = {k: v for k, v in update_data.items() if k not in ['cand_id', 'parsed_at']}
+                        # Remove cand_id from update_data for update (it shouldn't be updated)
+                        # We allow parsed_at to be updated to reflect the most recent parsing time
+                        update_data_for_update = {k: v for k, v in update_data.items() if k not in ['cand_id']}
                         result = self.client.table(self.parsed_resumes_table).update(update_data_for_update).eq("cand_id", candidate_id).execute()
                         action = "updated"
                     except Exception as update_error:
