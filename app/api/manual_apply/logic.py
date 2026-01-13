@@ -98,6 +98,7 @@ class ManualApplyService:
                     str(requirement_id),  # Convert to string as per schema
                     None,  # matching_id = NULL for manual apply
                     None,  # similarity_score = NULL for manual apply
+                    applied_via_agent=False,  # Set applied_via_agent=False for manual applications
                     max_retries=settings.retry_max_attempts,
                     initial_delay=settings.retry_initial_delay,
                     max_delay=settings.retry_max_delay,
@@ -105,10 +106,53 @@ class ManualApplyService:
                 )
                 
                 logger.info(f"Application tracking record created: application_id={tracking_record.get('application_id') if tracking_record else 'N/A'}")
+            
             except Exception as e:
-                # Log error but don't fail the entire process
-                # The stored procedure already executed successfully
-                logger.error(f"Failed to insert application tracking record: {str(e)}", exc_info=True)
+                # Check for Foreign Key Violation (Code 23503)
+                # Check both structured args and string representation for robustness
+                is_fk_violation = False
+                
+                # Debug logging to help diagnose why it wasn't caught before
+                # logger.warning(f"Lazy Sync Debug: Checking error: {type(e)} {e.args}")
+
+                if '23503' in str(e) or (e.args and isinstance(e.args[0], dict) and e.args[0].get('code') == '23503'):
+                    is_fk_violation = True
+                
+                if is_fk_violation:
+                    logger.warning(f"Lazy Sync: Requirement {requirement_id} missing in Supabase. Attempting auto-sync...")
+                    try:
+                        # 1. Fetch minimal details from SQL Server
+                        req_details = await asyncio.to_thread(self.sql_server.fetch_requirement_details, requirement_id)
+                        
+                        if req_details:
+                            # 2. Insert Stub into Supabase
+                            stub_success = await asyncio.to_thread(self.supabase.insert_parsed_requirement_stub, req_details)
+                            
+                            if stub_success:
+                                # 3. Retry Tracking Insert
+                                tracking_record = await retry_with_backoff(
+                                    asyncio.to_thread,
+                                    self.supabase.insert_application_tracking,
+                                    cand_id,
+                                    str(requirement_id),
+                                    None,
+                                    None,
+                                    applied_via_agent=False, # Pass usage flag in retry too
+                                    max_retries=1  # Only retry once
+                                )
+                                logger.info("Lazy Sync Successful: Tracking record inserted.")
+                            else:
+                                logger.warning("Lazy Sync: Failed to insert stub record.")
+                        else:
+                            logger.warning("Lazy Sync: Requirement details not found in SQL Server.")
+                            
+                    except Exception as sync_e:
+                        logger.error(f"Lazy Sync Exception: {str(sync_e)}")
+                
+                # If still no tracking record, log the original error
+                if not tracking_record:
+                    # Don't fail the request, just log
+                    logger.error(f"Failed to insert application tracking record: {str(e)}")
             
             return {
                 "success": True,

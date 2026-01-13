@@ -237,6 +237,60 @@ class SQLServerConnection:
                 cursor.close()
 
 
+    def fetch_requirement_details(self, requirement_id: int) -> Optional[dict]:
+        """
+        Fetch minimal requirement details for Lazy Sync.
+        Uses USP_AI_Get_JobSeekerRecommenededJobDetails (SourceID=1 for defaults).
+        """
+        with self.pool.get_connection() as conn:
+            cursor = conn.cursor()
+            try:
+                # Execute stored procedure
+                cursor.execute(
+                    "EXEC [dbo].[USP_AI_Get_JobSeekerRecommenededJobDetails] @RequirementID=?, @SourceID=?",
+                    requirement_id,
+                    1 # SourceID 1 (Talent Acquisition) as default source
+                )
+                
+                row = cursor.fetchone()
+                if not row:
+                    logger.warning(f"Lazy Sync: USP_AI_Get_JobSeekerRecommenededJobDetails returned no rows for ReqID={requirement_id}")
+                    return None
+                
+                columns = [column[0] for column in cursor.description]
+                result = dict(zip(columns, row))
+                
+                # Debug logging if needed
+                # logger.debug(f"SP Result Keys: {result.keys()}")
+
+                def get_val(keys):
+                    for k in keys:
+                        if k in result: return result[k]
+                    return None
+
+                remote_val = get_val(["remote_option", "RemoteOption", "RemoteOptionType"])
+                is_remote = False
+                if remote_val and isinstance(remote_val, str):
+                    if remote_val.lower() in ["remote", "hybrid"]:
+                        is_remote = True
+                
+                return {
+                    "requirement_id": str(requirement_id),
+                    "client_job_title": get_val(["job_title", "JobTitle", "JobTitleText"]),
+                    "requirement_job_description": get_val(["job_description", "JobDescription", "RequirementJobDescription"]),
+                    "min_payrate": get_val(["pay_rate_to_candidate", "PayRateToCandidate", "MinPayRate"]),
+                    "client_name": get_val(["client_name", "ClientName"]),
+                    "address": get_val(["location", "Location"]),
+                    "is_remote_location": is_remote,
+                    "created_at": get_val(["created_date", "CreatedDate"])
+                }
+                
+            except Exception as e:
+                logger.error(f"Error fetching requirement details: {str(e)}")
+                return None
+            finally:
+                cursor.close()
+
 class SQLServerRepository:
     """Repository for fetching candidates from SQL Server (for Candidate Sync API)"""
 

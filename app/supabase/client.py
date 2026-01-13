@@ -107,18 +107,21 @@ class SupabaseClient:
         cand_id: int, 
         requirement_id: str, 
         matching_id: Optional[int] = None, 
-        similarity_score: Optional[float] = None
+        similarity_score: Optional[float] = None,
+        applied_via_agent: Optional[bool] = None
     ) -> Optional[dict]:
         """
-        Insert or update application tracking record
-        
-        Uses upsert to handle unique constraint on (cand_id, requirement_id)
+        Insert a record into the job_application_tracking table.
         
         Args:
             cand_id: Candidate ID
-            requirement_id: Requirement/Job ID
-            matching_id: Optional matching ID from cand_job_matching (NULL for manual apply)
-            similarity_score: Optional similarity score (NULL for manual apply)
+            requirement_id: Requirement ID (as string)
+            matching_id: Matching ID (optional)
+            similarity_score: Similarity score (optional)
+            applied_via_agent: Whether applied via Agent (True) or Manual (False)
+            
+        Returns:
+            dict: The inserted record if successful, None otherwise
         """
         try:
             from datetime import datetime, timezone
@@ -126,16 +129,19 @@ class SupabaseClient:
             
             tracking_data = {
                 "cand_id": cand_id,
-                "requirement_id": requirement_id,
+                "requirement_id": str(requirement_id),
                 "application_status": "MATCHED",
-                "applied_at": datetime.now(timezone.utc).isoformat()
+                "status_updated_at": datetime.utcnow().isoformat()
             }
             
-            # Only include matching_id and similarity_score if provided
-            if matching_id is not None:
+            if matching_id:
                 tracking_data["matching_id"] = matching_id
+                
             if similarity_score is not None:
-                tracking_data["similarity_score"] = similarity_score
+                tracking_data["similarity_score"] = float(similarity_score)
+                
+            if applied_via_agent is not None:
+                tracking_data["applied_via_agent"] = applied_via_agent
             
             # Use upsert to handle unique constraint
             # This will insert if not exists, or update if exists
@@ -183,6 +189,62 @@ class SupabaseClient:
         except Exception as e:
             logger.error(f"Error inserting application tracking record: {str(e)}")
             raise
+
+    def insert_parsed_requirement_stub(self, requirement_data: dict) -> bool:
+        """
+        Insert a stub record into parsed_requirements for Lazy Sync.
+        
+        This is used when Manual Apply encounters a job that hasn't been parsed 
+        by the AI Matcher yet, to satisfy FK constraints.
+        
+        Args:
+            requirement_data: Dict containing requirement_id and other available fields
+            
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        try:
+            # Construct payload matching parsed_requirements schema
+            payload = {
+                "requirement_id": str(requirement_data.get("requirement_id")),
+                "client_job_title": requirement_data.get("client_job_title", "Unknown Job Title"),
+                "requirement_job_description": requirement_data.get("requirement_job_description"),
+                "is_remote_location": requirement_data.get("is_remote_location", False),
+                "min_payrate": requirement_data.get("min_payrate"),
+                "client_name": requirement_data.get("client_name"),
+                "address": requirement_data.get("address"),
+                "status": "OPEN"
+            }
+            
+            # Serialize datetimes and Decimals if present
+            from datetime import datetime
+            from decimal import Decimal
+            
+            created_at = requirement_data.get("created_at")
+            if created_at:
+                if isinstance(created_at, datetime):
+                    payload["created_at"] = created_at.isoformat()
+                else:
+                    payload["created_at"] = created_at
+
+            # Ensure payrate is float/str if Decimal
+            min_pay = payload.get("min_payrate")
+            if isinstance(min_pay, Decimal):
+                payload["min_payrate"] = float(min_pay)
+            
+            # Try to insert
+            self.client.table("parsed_requirements").upsert(
+                payload,
+                on_conflict="requirement_id"
+            ).execute()
+            
+            logger.info(f"Created stub record in parsed_requirements for requirement_id={payload['requirement_id']}")
+            return True
+            
+        except Exception as e:
+            # If it fails (e.g. missing non-nullable column), we log and return False
+            logger.warning(f"Failed to create stub record for requirement_id={requirement_data.get('requirement_id')}: {e}")
+            return False
     
     def get_candidate_preferences(self, cand_id: int) -> Optional[dict]:
         """

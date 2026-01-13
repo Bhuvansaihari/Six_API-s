@@ -262,6 +262,7 @@ class WebhookProcessingService:
                     matching.requirement_id,
                     matching.matching_id,
                     matching.similarity_score,
+                    applied_via_agent=True,  # Set applied_via_agent=True for webhook applications
                     max_retries=settings.retry_max_attempts,
                     initial_delay=settings.retry_initial_delay,
                     max_delay=settings.retry_max_delay,
