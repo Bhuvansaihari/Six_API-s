@@ -62,7 +62,10 @@ async def get_job_list(
             cache_manager = get_cache_manager()
             cached_result = cache_manager.get_list(candidate_id=candidate_id)
             if cached_result:
-                logger.info(f"Returning cached job list for candidate_id={candidate_id}")
+                logger.info(
+                    f"Returning cached job list for candidate_id={candidate_id}",
+                    extra={'log_to_db': True, 'service_name': 'job_list', 'candidate_id': candidate_id, 'cache_hit': True}
+                )
                 return cached_result
 
         # Execute stored procedure
@@ -79,6 +82,11 @@ async def get_job_list(
         if use_cache:
             cache_manager = get_cache_manager()
             cache_manager.set_list(candidate_id=candidate_id, value=response)
+        
+        logger.info(
+            f"Successfully retrieved job list for candidate_id={candidate_id}",
+            extra={'log_to_db': True, 'service_name': 'job_list', 'candidate_id': candidate_id, 'count': total_count}
+        )
         
         return response
         

@@ -115,7 +115,10 @@ async def process_notifications_for_application(
                 await asyncio.get_event_loop().run_in_executor(
                     None, mark_email_sent, application_id
                 )
-                logger.info("✅ Email sent")
+                logger.info(
+                    "✅ Email sent",
+                    extra={'log_to_db': True, 'service_name': 'outreach_agent', 'action': 'email_sent', 'candidate_id': cand_id, 'application_id': application_id}
+                )
             else:
                 logger.info("⏭️ Email not sent (preference false or already sent)")
 
@@ -141,7 +144,10 @@ async def process_notifications_for_application(
                     await asyncio.get_event_loop().run_in_executor(
                         None, mark_sms_sent, application_id
                     )
-                    logger.info("✅ SMS sent")
+                    logger.info(
+                        "✅ SMS sent",
+                        extra={'log_to_db': True, 'service_name': 'outreach_agent', 'action': 'sms_sent', 'candidate_id': cand_id, 'application_id': application_id}
+                    )
                 else:
                     logger.warning("⚠️ No valid phone for SMS")
             else:

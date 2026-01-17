@@ -24,6 +24,19 @@ def setup_logging(level: str = "INFO", json_output: bool = False) -> None:
             stream=sys.stdout,
         )
 
+    # Attach Supabase Logging Handler
+    try:
+        from app.utils.supabase_logging_handler import SafeSupabaseHandler
+        # Create handler (defaults to max_size=1000)
+        supabase_handler = SafeSupabaseHandler()
+        # Set level to NOTSET so it receives all events, but let the handler filter internally
+        # Or better, set it to INFO to reduce noise hitting the handler logic
+        supabase_handler.setLevel(logging.INFO)
+        logging.getLogger().addHandler(supabase_handler)
+    except Exception as e:
+        # Don't crash setup if logging fails
+        print(f"Failed to initialize Supabase logger: {e}", file=sys.stderr)
+
 
 class _JsonMessageAdapter(logging.Filter):
     """Transform log records into JSON payloads."""

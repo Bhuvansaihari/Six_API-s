@@ -48,7 +48,10 @@ async def sync_candidate(
             sql_repo,
             supabase_repo,
         )
-        logger.info("Candidate sync succeeded", extra={"email": payload.email})
+        logger.info(
+            "Candidate sync succeeded",
+            extra={"log_to_db": True, "service_name": "candidate_sync", "email": payload.email, "candidate_id": getattr(candidate, 'cand_id', None)}
+        )
         return CandidateSyncResponse(
             success=True,
             message="Candidate synchronized successfully.",

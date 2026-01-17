@@ -82,7 +82,10 @@ async def process_resume_endpoint(
     # Try to get from cache
     cached_result = await cache.get(cache_key)
     if cached_result:
-        logger.info(f"Cache hit for candidate_id={candidate_id}, file_hash={file_hash[:8]}")
+        logger.info(
+            f"Cache hit for candidate_id={candidate_id}, file_hash={file_hash[:8]}",
+            extra={'log_to_db': True, 'service_name': 'resume_intake', 'candidate_id': candidate_id, 'cache_hit': True}
+        )
         return JSONResponse(
             status_code=200,
             content={
@@ -110,7 +113,10 @@ async def process_resume_endpoint(
             # Cache the result
             await cache.set(cache_key, result, ttl=3600)  # Cache for 1 hour
             
-            logger.info(f"Successfully processed resume for candidate_id={candidate_id}")
+            logger.info(
+                f"Successfully processed resume for candidate_id={candidate_id}",
+                extra={'log_to_db': True, 'service_name': 'resume_intake', 'candidate_id': candidate_id}
+            )
             
             return JSONResponse(
                 status_code=200,

@@ -78,7 +78,8 @@ async def get_job_recommendations_list(
         
         logger.info(
             f"Successfully retrieved {len(result.get('recommendations', []))} "
-            f"recommendations for candidate_id={candidate_id}"
+            f"recommendations for candidate_id={candidate_id}",
+            extra={'log_to_db': True, 'service_name': 'recommendations', 'candidate_id': candidate_id, 'count': len(result.get('recommendations', []))}
         )
         
         return JSONResponse(
@@ -185,7 +186,10 @@ async def get_job_recommendation_details(
                 status_code=status.HTTP_200_OK
             )
         
-        logger.info(f"Successfully retrieved details for requirement_id={requirement_id}, source_id={source_id}")
+        logger.info(
+            f"Successfully retrieved details for requirement_id={requirement_id}, source_id={source_id}",
+            extra={'log_to_db': True, 'service_name': 'recommendations', 'requirement_id': requirement_id, 'source_id': source_id}
+        )
         
         return JSONResponse(
             content=result,

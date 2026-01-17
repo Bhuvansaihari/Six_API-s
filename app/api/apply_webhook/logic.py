@@ -269,7 +269,16 @@ class WebhookProcessingService:
                     exponential_base=settings.retry_exponential_base
                 )
                 
-                logger.info(f"Application tracking record created: application_id={tracking_record.get('application_id') if tracking_record else 'N/A'}")
+                logger.info(
+                    f"Application tracking record created: application_id={tracking_record.get('application_id') if tracking_record else 'N/A'}",
+                    extra={
+                        'log_to_db': True,
+                        'service_name': 'apply_webhook',
+                        'application_id': tracking_record.get('application_id') if tracking_record else None,
+                        'candidate_id': matching.cand_id,
+                        'requirement_id': matching.requirement_id
+                    }
+                )
             except Exception as e:
                 # Log error but don't fail the entire process
                 # The stored procedure already executed successfully

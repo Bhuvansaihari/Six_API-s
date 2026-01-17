@@ -181,7 +181,8 @@ async def get_requirement_details(
         if cached_data:
             elapsed = time.time() - start_time
             logger.info(
-                f"Cache hit for requirement_id={requirement_id} (took {elapsed:.3f}s)"
+                f"Cache hit for requirement_id={requirement_id} (took {elapsed:.3f}s)",
+                extra={'log_to_db': True, 'service_name': 'requirement_details', 'requirement_id': requirement_id, 'cache_hit': True}
             )
             return RequirementDetailsResponse(**cached_data)
         
@@ -217,8 +218,8 @@ async def get_requirement_details(
             
             elapsed = time.time() - start_time
             logger.info(
-                f"Successfully fetched requirement_id={requirement_id} from database "
-                f"(took {elapsed:.3f}s)"
+                f"Successfully fetched requirement_id={requirement_id} from database (took {elapsed:.3f}s)",
+                extra={'log_to_db': True, 'service_name': 'requirement_details', 'requirement_id': requirement_id, 'cache_hit': False}
             )
             
             return RequirementDetailsResponse(**result)

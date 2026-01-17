@@ -48,6 +48,10 @@ async def apply_job(
         
         # Return appropriate HTTP status based on result
         if result.get("success"):
+            logger.info(
+                f"Manual application successful for cand_id={request_body.cand_id}, requirement_id={request_body.requirement_id}",
+                extra={'log_to_db': True, 'service_name': 'manual_apply', 'candidate_id': request_body.cand_id, 'requirement_id': request_body.requirement_id}
+            )
             return JSONResponse(
                 status_code=200,
                 content=result
