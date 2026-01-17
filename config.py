@@ -364,54 +364,7 @@ class Settings(BaseSettings):
         description="Rate limit for Requirement Details API (format: 'number/period', e.g., '100/minute')."
     )
 
-    # ========== Outreach Agent V1 API Configuration ==========
-    # SendGrid Email Configuration
-    outreach_agent_sendgrid_api_key: Optional[SecretStr] = Field(
-        None,
-        alias="SENDGRID_API_KEY",
-        description="SendGrid API key for sending email notifications."
-    )
-    outreach_agent_sendgrid_from_email: Optional[str] = Field(
-        None,
-        alias="SENDGRID_FROM_EMAIL",
-        description="SendGrid sender email address."
-    )
-    outreach_agent_sendgrid_reply_to_email: Optional[str] = Field(
-        None,
-        alias="SENDGRID_REPLY_TO_EMAIL",
-        description="SendGrid reply-to email address."
-    )
 
-    # Twilio SMS Configuration
-    outreach_agent_twilio_account_sid: Optional[SecretStr] = Field(
-        None,
-        alias="TWILIO_ACCOUNT_SID",
-        description="Twilio account SID for sending SMS notifications."
-    )
-    outreach_agent_twilio_auth_token: Optional[SecretStr] = Field(
-        None,
-        alias="TWILIO_AUTH_TOKEN",
-        description="Twilio authentication token."
-    )
-    outreach_agent_twilio_phone_number: Optional[str] = Field(
-        None,
-        alias="TWILIO_PHONE_NUMBER",
-        description="Twilio phone number for sending SMS (format: +1234567890)."
-    )
-
-    # Webhook Configuration
-    outreach_agent_webhook_secret: Optional[SecretStr] = Field(
-        None,
-        alias="WEBHOOK_SECRET",
-        description="Secret key for validating webhook requests."
-    )
-
-    # Concurrency Configuration
-    outreach_agent_max_concurrent_tasks: int = Field(
-        20,
-        alias="MAX_CONCURRENT_TASKS",
-        description="Maximum number of concurrent notification tasks (default: 20)."
-    )
 
     # OpenAI Model Configuration (shared with Resume Intake API)
     openai_model: str = Field(

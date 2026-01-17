@@ -21,7 +21,6 @@ from app.api.candidate_sync.router import router as candidate_sync_router
 from app.api.resume_intake.router import router as resume_intake_router
 from app.api.recommendations.router import router as recommendations_router
 from app.api.requirement_details.router import router as requirement_details_router
-from app.api.outreach_agent.router import router as outreach_agent_router
 from app.api.manual_apply.router import router as manual_apply_router
 from app.api.job_list.router import router as job_list_router
 # TEMPORARY TEST ENDPOINT - Can be safely deleted later
@@ -106,10 +105,6 @@ async def lifespan(app: FastAPI):
     app.state.job_list_limiter = Limiter(key_func=get_remote_address)
     logging.info("Job List API: Rate limiter initialized")
 
-    # Initialize semaphore for Outreach Agent V1 API
-    app.state.outreach_agent_semaphore = asyncio.Semaphore(settings.outreach_agent_max_concurrent_tasks)
-    logging.info(f"Outreach Agent API: Semaphore initialized (max_concurrent_tasks={settings.outreach_agent_max_concurrent_tasks})")
-
     yield
     
     # Shutdown: Close cache and database pool
@@ -169,7 +164,6 @@ app.include_router(candidate_sync_router)
 app.include_router(resume_intake_router)
 app.include_router(recommendations_router)
 app.include_router(requirement_details_router)
-app.include_router(outreach_agent_router)
 app.include_router(manual_apply_router)
 app.include_router(job_list_router, prefix="/api")
 # TEMPORARY TEST ENDPOINT - Can be safely deleted later
@@ -199,7 +193,6 @@ async def health_check():
             "resume_intake": "/resume-intake/process-resume",
             "recommendations": "/api/recommendations",
             "requirement_details": "/api/requirement/{requirement_id}",
-            "outreach_agent": "/webhook/outreach/job-match",
             "manual_apply": "/apply-job"
         }
     }

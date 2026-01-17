@@ -11,8 +11,47 @@ This project merges seven FastAPI services into a single unified application:
 3. **Resume Intake API** - Processes resume files (PDF/DOCX/TXT), extracts structured data using GPT-4o, and stores embeddings in Qdrant
 4. **Get Recommendations API** - Retrieves job recommendations for candidates using SQL Server stored procedures with caching and rate limiting
 5. **Get Requirement Details API** - Fetches requirement/job details by ID from SQL Server with caching and rate limiting
-6. **Outreach Agent V1 API** - Sends email (SendGrid) and SMS (Twilio) notifications to candidates when they're matched with jobs
-7. **Manual Apply API** - Manually applies a candidate to a job requirement by accepting candidate_id and requirement_id directly
+6. **Manual Apply API** - Manually applies a candidate to a job requirement by accepting candidate_id and requirement_id directly
+
+
+## 🏗️ Architecture
+
+```mermaid
+graph TD
+    Client[Client Applications] -->|HTTP/REST| API[Unified FastAPI Gateway]
+    
+    subgraph "Unified API Service"
+        API --> Auth[Authentication]
+        API --> Router[Router Layer]
+        
+        Router --> RI[Resume Intake]
+        Router --> JS[Job Search & Recs]
+        Router --> MA[Manual Apply]
+        Router --> AW[Apply Webhook]
+        Router --> CS[Candidate Sync]
+    end
+    
+    subgraph "Data Layer"
+        RI -->|Embeddings| Q[Qdrant Vector DB]
+        RI -.->|Structured Data| SUPA[(Supabase)]
+        
+        JS -->|Stored Procedures| SQL[(SQL Server)]
+        JS -->|Caching| Redis[(Redis/Memory)]
+        
+        MA -->|Tracking| SUPA
+        MA -->|Apply SP| SQL
+        
+        AW -->|Webhook Event| SUPA
+        AW -->|Apply SP| SQL
+        
+        CS -->|Read| SQL
+        CS -->|Upsert| SUPA
+    end
+    
+    subgraph "External Services"
+        RI -->|Parse/Embed| OAI[OpenAI GPT-4o]
+    end
+```
 
 ---
 
@@ -41,9 +80,7 @@ This project merges seven FastAPI services into a single unified application:
 │   │   └── requirement_details/ # Get Requirement Details API module
 │   │       ├── router.py       # FastAPI routes for requirement details
 │   │       └── schemas.py      # Pydantic models
-│   │   └── outreach_agent/     # Outreach Agent V1 API module
-│   │       ├── router.py       # FastAPI routes for webhook notifications
-│   │       └── schemas.py      # Pydantic models
+
 │   │   └── manual_apply/      # Manual Apply API module
 │   │       ├── router.py       # FastAPI routes for manual job applications
 │   │       ├── logic.py        # Business logic
@@ -68,14 +105,7 @@ This project merges seven FastAPI services into a single unified application:
 │   │   └── requirement_details/ # Get Requirement Details services
 │   │       ├── db_pool.py          # Database connection pool
 │   │       └── cache.py            # Caching with aiocache
-│   │   └── outreach_agent/     # Outreach Agent V1 services
-│   │       ├── database.py         # Supabase operations
-│   │       ├── email_service.py    # SendGrid email sending
-│   │       ├── sms_service.py      # Twilio SMS sending
-│   │       ├── email_template.py   # Email template rendering
-│   │       ├── utils.py            # Utility functions
-│   │       └── templates/          # Email HTML templates
-│   │           └── job_match_email.html
+
 │   └── utils/
 │       ├── __init__.py
 │       ├── retry_utils.py       # Retry logic with exponential backoff
@@ -86,170 +116,43 @@ This project merges seven FastAPI services into a single unified application:
 ├── .gitignore                   # Git ignore rules
 ├── Dockerfile                   # Docker configuration
 └── README.md                    # This file
+
+## 🔒 Security & Observability
+
+### 1. Environment Encryption
+Sensitive credentials in `.env` are encrypted at rest using **Fernet (symmetric encryption)**.
+
+- **Tool**: `scripts/manage_secrets.py`
+- **Key**: `master.key` (Added to `.gitignore`)
+- **Runtime**: `config.py` transparently decrypts values starting with `gAAAA...`.
+
+**Usage:**
+```bash
+# 1. Generate Key
+python scripts/manage_secrets.py generate
+
+# 2. Encrypt .env
+python scripts/manage_secrets.py encrypt
+
+# 3. Decrypt .env (for editing)
+python scripts/manage_secrets.py decrypt
 ```
 
----
+### 2. Centralized Logging (Supabase)
+All logs are asynchronously shipped to the `auto_apply_apis_logs` table in Supabase without blocking the main thread.
 
-## 🔄 Migration Details
+- **Handler**: `SafeSupabaseHandler` (uses background worker thread)
+- **Levels**:
+    - `ERROR/CRITICAL`: Automatically logged.
+    - `INFO/WARNING`: Logged ONLY if `extra={'log_to_db': True}` is passed.
 
-### Files Migrated from Apply_API-master
-
-| Original Location | New Location | Description |
-|------------------|--------------|-------------|
-| `Apply_API-master/Apply_API-master/main.py` | `app/api/apply_webhook/router.py` | FastAPI routes for webhook endpoint |
-| `Apply_API-master/Apply_API-master/services.py` | `app/api/apply_webhook/logic.py` | Webhook processing business logic |
-| `Apply_API-master/Apply_API-master/models.py` | `app/api/apply_webhook/models.py` | Pydantic models for webhook payloads |
-| `Apply_API-master/Apply_API-master/database.py` | `app/db/sql_server.py` | SQL Server connection pool and connection classes |
-| `Apply_API-master/Apply_API-master/retry_utils.py` | `app/utils/retry_utils.py` | Retry logic with exponential backoff |
-| `Apply_API-master/Apply_API-master/config.py` | `config.py` (merged) | Configuration merged with candidate sync config |
-
-### Files Migrated from Candi_sync_api-main
-
-| Original Location | New Location | Description |
-|------------------|--------------|-------------|
-| `Candi_sync_api-main/Candi_sync_api-main/main.py` | `app/api/candidate_sync/router.py` | FastAPI routes for candidate sync endpoint |
-| `Candi_sync_api-main/Candi_sync_api-main/services/candidate_sync.py` | `app/api/candidate_sync/logic.py` | Candidate sync business logic |
-| `Candi_sync_api-main/Candi_sync_api-main/schemas.py` | `app/api/candidate_sync/schemas.py` | Pydantic schemas for candidate sync |
-| `Candi_sync_api-main/Candi_sync_api-main/db/sql_server.py` | `app/db/sql_server.py` (merged) | SQL Server repository merged with Apply API database code |
-| `Candi_sync_api-main/Candi_sync_api-main/db/supabase.py` | `app/supabase/client.py` (merged) | Supabase repository merged with Apply API Supabase client |
-| `Candi_sync_api-main/Candi_sync_api-main/logger.py` | `app/utils/logger.py` | Logging configuration |
-| `Candi_sync_api-main/Candi_sync_api-main/config.py` | `config.py` (merged) | Configuration merged with Apply API config |
-
-### Files Migrated from Resume_intake_API
-
-| Original Location | New Location | Description |
-|------------------|--------------|-------------|
-| `Resume_intake_API/main.py` | `app/api/resume_intake/router.py` | FastAPI routes for resume processing endpoint |
-| `Resume_intake_API/processor.py` | `app/api/resume_intake/logic.py` | Resume processing pipeline logic |
-| `Resume_intake_API/services/resume_parser.py` | `app/services/resume_intake/resume_parser.py` | PDF/DOCX/TXT file parsing |
-| `Resume_intake_API/services/database.py` | `app/services/resume_intake/database.py` | Supabase database operations |
-| `Resume_intake_API/services/embeddings.py` | `app/services/resume_intake/embeddings.py` | OpenAI embeddings generation |
-| `Resume_intake_API/services/vector_store.py` | `app/services/resume_intake/vector_store.py` | Qdrant vector storage |
-| `Resume_intake_API/requirements.txt` | `requirements.txt` (merged) | Dependencies merged into unified requirements |
-| `Resume_intake_API/.env.example` | `config.py` (merged) | Environment variables merged into unified config |
-
-### Files Migrated from Get_Recommendations_API
-
-| Original Location | New Location | Description |
-|------------------|--------------|-------------|
-| `Get_Recommendations_API/main.py` | `app/api/recommendations/router.py` | FastAPI routes for job recommendations endpoint |
-| `Get_Recommendations_API/db_pool.py` | `app/services/recommendations/db_pool.py` | Database connection pool manager |
-| `Get_Recommendations_API/cache_manager.py` | `app/services/recommendations/cache_manager.py` | Caching functionality (memory/Redis) |
-| `Get_Recommendations_API/database_service.py` | `app/services/recommendations/database_service.py` | Database operations and stored procedure execution |
-| `Get_Recommendations_API/requirements.txt` | `requirements.txt` (merged) | Dependencies merged into unified requirements |
-| `Get_Recommendations_API/env.example.txt` | `config.py` (merged) | Environment variables merged into unified config |
-
-### Files Migrated from Get_RequirementDetails_API
-
-| Original Location | New Location | Description |
-|------------------|--------------|-------------|
-| `Get_RequirementDetails_API/main.py` | `app/api/requirement_details/router.py` | FastAPI routes for requirement details endpoint |
-| `Get_RequirementDetails_API/database.py` | `app/services/requirement_details/db_pool.py` | Database connection pool manager |
-| `Get_RequirementDetails_API/cache.py` | `app/services/requirement_details/cache.py` | Caching functionality with aiocache |
-| `Get_RequirementDetails_API/models.py` | `app/api/requirement_details/schemas.py` | Pydantic models for API responses |
-| `Get_RequirementDetails_API/requirements.txt` | `requirements.txt` (merged) | Dependencies merged into unified requirements |
-| `Get_RequirementDetails_API/.env.example` | `config.py` (merged) | Environment variables merged into unified config |
-
-### Files Migrated from Out_Reach_Agent-V1-
-
-| Original Location | New Location | Description |
-|------------------|--------------|-------------|
-| `Out_Reach_Agent-V1-/webhook_receiver/main.py` | `app/api/outreach_agent/router.py` | FastAPI routes for webhook notifications |
-| `Out_Reach_Agent-V1-/webhook_receiver/database.py` | `app/services/outreach_agent/database.py` | Supabase database operations |
-| `Out_Reach_Agent-V1-/webhook_receiver/email_template.py` | `app/services/outreach_agent/email_template.py` | Email template rendering |
-| `Out_Reach_Agent-V1-/webhook_receiver/utils.py` | `app/services/outreach_agent/utils.py` | Utility functions (formatting, validation) |
-| `Out_Reach_Agent-V1-/webhook_receiver/job_match_email.html` | `app/services/outreach_agent/templates/job_match_email.html` | HTML email template |
-| `Out_Reach_Agent-V1-/webhook_receiver/notifications.py` | `app/services/outreach_agent/email_service.py` + `sms_service.py` | Split into separate email and SMS services |
-| `Out_Reach_Agent-V1-/requirements.txt` | `requirements.txt` (merged) | Dependencies merged into unified requirements |
-
-### New Files Created
-
-| File | Purpose |
-|------|---------|
-| `app/main.py` | Unified FastAPI application entry point |
-| `app/__init__.py` | Python package marker |
-| `app/api/__init__.py` | API package marker |
-| `app/api/resume_intake/__init__.py` | Resume Intake API package marker |
-| `app/db/__init__.py` | Database package marker |
-| `app/supabase/__init__.py` | Supabase package marker |
-| `app/services/__init__.py` | Services package marker |
-| `app/services/resume_intake/__init__.py` | Resume Intake services package marker |
-| `app/utils/__init__.py` | Utils package marker |
-| `config.py` | Unified configuration combining all projects |
-| `requirements.txt` | Merged dependencies from all projects |
-| `.env.example` | Environment variables template |
-| `.gitignore` | Git ignore rules |
-| `Dockerfile` | Docker configuration |
-| `README.md` | This comprehensive documentation |
-
-### Files That Can Be Safely Deleted
-
-All files from the original projects have been migrated. The following folders can be **safely deleted**:
-
-#### ✅ Safe to Delete - Resume_intake_API/
-
-#### ✅ Safe to Delete - Apply_API-master/
-
-```
-Apply_API-master/Apply_API-master/
-├── config.py          ✅ Migrated to config.py (merged)
-├── database.py        ✅ Migrated to app/db/sql_server.py
-├── main.py            ✅ Migrated to app/api/apply_webhook/router.py
-├── models.py          ✅ Migrated to app/api/apply_webhook/models.py
-├── requirements.txt   ✅ Merged into requirements.txt
-├── retry_utils.py     ✅ Migrated to app/utils/retry_utils.py
-├── services.py        ✅ Migrated to app/api/apply_webhook/logic.py
-├── README.md          ✅ Merged into README.md
-├── test_quick.py      ⚠️  Optional: Test file (can be migrated if needed)
-└── test_reliability.py ⚠️  Optional: Test file (can be migrated if needed)
-```
-
-#### ✅ Safe to Delete - Candi_sync_api-main/
-
-```
-Candi_sync_api-main/Candi_sync_api-main/
-├── config.py          ✅ Migrated to config.py (merged)
-├── main.py            ✅ Migrated to app/api/candidate_sync/router.py
-├── schemas.py         ✅ Migrated to app/api/candidate_sync/schemas.py
-├── logger.py          ✅ Migrated to app/utils/logger.py
-├── requirements.txt   ✅ Merged into requirements.txt
-├── README.md          ✅ Merged into README.md
-├── run.bat            ⚠️  Optional: Helper script (can be recreated if needed)
-├── run.ps1            ⚠️  Optional: Helper script (can be recreated if needed)
-├── db/
-│   ├── sql_server.py  ✅ Migrated to app/db/sql_server.py (merged)
-│   └── supabase.py    ✅ Migrated to app/supabase/client.py (merged)
-├── services/
-│   └── candidate_sync.py ✅ Migrated to app/api/candidate_sync/logic.py
-└── tests/
-    └── test_candidate_sync.py ⚠️  Optional: Test file (can be migrated if needed)
-```
-
-#### ✅ Safe to Delete - Resume_intake_API/
-
-```
-Resume_intake_API/
-├── main.py                    ✅ Migrated to app/api/resume_intake/router.py
-├── processor.py               ✅ Migrated to app/api/resume_intake/logic.py
-├── services/
-│   ├── resume_parser.py       ✅ Migrated to app/services/resume_intake/resume_parser.py
-│   ├── database.py            ✅ Migrated to app/services/resume_intake/database.py
-│   ├── embeddings.py         ✅ Migrated to app/services/resume_intake/embeddings.py
-│   └── vector_store.py       ✅ Migrated to app/services/resume_intake/vector_store.py
-├── requirements.txt           ✅ Merged into requirements.txt
-├── README.md                  ✅ Merged into README.md
-├── SETUP_GUIDE.md             ⚠️  Optional: Documentation (can be kept for reference)
-├── WORKFLOW_EXPLANATION.md    ⚠️  Optional: Documentation (can be kept for reference)
-└── supabase_setup.sql         ⚠️  Optional: SQL setup script (can be kept for reference)
-```
-
-**Note:** Test files (`test_*.py`) are optional. You can:
-- Delete them if you don't need tests
-- Migrate them to `app/tests/` if you want to keep them (update import paths)
-
-**Note:** Documentation files from Resume_intake_API are optional. You can:
-- Delete them if you don't need the reference documentation
-- Keep them for reference if needed
+**Log Schema:**
+| Column | Description |
+|--------|-------------|
+| `service_name` | Name of the service (e.g., `resume_intake`) |
+| `level` | Log level (INFO, ERROR) |
+| `message` | Human-readable message |
+| `metadata` | JSONB column for extra context (cand_id, stack_trace, etc.) |
 
 ---
 
@@ -476,6 +379,43 @@ curl -X POST "http://localhost:8000/resume-intake/process-resume?candidate_id=12
   -F "file=@resume.pdf"
 ```
 
+- Plain Text (`.txt`)
+
+**Process Flow:**
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant API as Resume Intake API
+    participant GP as Resume Parser
+    participant GPT as OpenAI GPT-4o
+    participant Q as Qdrant DB
+    participant S as Supabase DB
+
+    C->>API: Upload Resume (PDF/DOCX)
+    API->>API: Generate File Hash
+    API->>S: Check Cache (Hash+CandID)
+    
+    alt Cache Hit
+        S-->>API: Return Cached Result
+        API-->>C: Return JSON (Cached)
+    else Cache Miss
+        API->>GP: Extract Text
+        GP-->>API: Raw Text
+        API->>GPT: Parse Structured Data
+        GPT-->>API: JSON Data
+        API->>GPT: Generate Embeddings
+        GPT-->>API: Vector [1536]
+        
+        par Parallel Save
+            API->>S: Upsert Candidate Info
+            API->>S: Upsert Parsed Data (JSON)
+            API->>Q: Store Vector
+        end
+        
+        API-->>C: Return JSON (Fresh)
+    end
+```
+
 **Supported File Types:**
 - PDF (`.pdf`)
 - Microsoft Word (`.docx`, `.doc`)
@@ -600,8 +540,27 @@ This endpoint retrieves job recommendations for a candidate using SQL Server sto
 - `DELETE /api/recommendations/cache/clear` - Clear all cached entries
 
 **Process Flow:**
-```
-Request → Validate candidate_id → Check Cache → [If miss] Get DB Connection → Execute SP → Cache Result → Return
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant API as Recs API
+    participant R as Redis/Cache
+    participant P as DB Pool
+    participant DB as SQL Server
+    
+    C->>API: Get Recommendations (CandID)
+    API->>R: Check Cache
+    alt Cache Hit
+        R-->>API: Cached JSON
+        API-->>C: Return Recommendations
+    else Cache Miss
+        API->>P: Request Connection
+        P->>DB: Execute USP_SC_Get_...
+        DB-->>P: Result Set
+        P-->>API: Data List
+        API->>R: Set Cache (5 min TTL)
+        API-->>C: Return Recommendations
+    end
 ```
 
 **Note:**
@@ -689,108 +648,7 @@ Request → Validate Parameters → Generate Cache Key → Check Cache → [If m
 - Uses async database connection pooling
 - Cache key includes both requirement_id and company_id for proper isolation
 
-### Outreach Agent V1 API
 
-Sends email (SendGrid) and SMS (Twilio) notifications to candidates when they're matched with jobs via Supabase webhooks.
-
-**Endpoint:** `POST /webhook/outreach/job-match`
-
-**Description:**
-This endpoint processes webhook events from Supabase when a new job application is created in `job_application_tracking`. It performs the following steps:
-
-1. Receives webhook payload with `cand_id` and `requirement_id`
-2. Validates webhook secret (if configured)
-3. Validates payload structure (type=INSERT, table=job_application_tracking)
-4. Queues notification processing task asynchronously (returns 202 Accepted immediately)
-5. **Background Processing (async):**
-   - Acquires semaphore slot (concurrency control)
-   - Calls Supabase RPC function `get_application_details` to fetch:
-     - Candidate information (name, email, phone, notification preferences)
-     - Requirement details (title, description, location, company, similarity score)
-     - Application status and notification flags
-   - Checks if notifications already sent (`email_sent`, `sms_sent` flags)
-   - **Email Notification (if enabled):**
-     - Checks `notify_email` preference (default: true)
-     - If enabled and not sent:
-       - Renders HTML email template with job details
-       - Sends email via SendGrid
-       - Marks `email_sent = true` and records `email_sent_at` timestamp
-   - **SMS Notification (if enabled):**
-     - Checks `notify_sms` preference (default: false)
-     - If enabled and not sent:
-       - Formats phone number (E.164 format)
-       - Validates phone number
-       - Sends SMS via Twilio (160 character limit)
-       - Marks `sms_sent = true` and records `sms_sent_at` timestamp
-   - Releases semaphore slot
-
-**Process Flow:**
-```
-Webhook → Validate Secret → Queue Task → [Async] Fetch Details → Check Preferences → Send Email/SMS → Mark Sent → Release Semaphore
-```
-
-**Request Headers:**
-```
-X-Webhook-Secret: <webhook_secret>  # Optional, if WEBHOOK_SECRET is configured
-Content-Type: application/json
-```
-
-**Request Body (Supabase Webhook Payload):**
-```json
-{
-  "type": "INSERT",
-  "table": "job_application_tracking",
-  "record": {
-    "cand_id": 123,
-    "requirement_id": "REQ-456",
-    "application_id": 789,
-    "similarity_score": 0.85,
-    "application_status": "MATCHED"
-  },
-  "schema": "public"
-}
-```
-
-**Response (202 Accepted):**
-```json
-{
-  "status": "accepted",
-  "message": "Notifications queued",
-  "cand_id": 123,
-  "requirement_id": "REQ-456",
-  "timestamp": "2025-01-15T10:30:00.000Z",
-  "concurrency": {
-    "max_concurrent_tasks": 50
-  }
-}
-```
-
-**Health Check:** `GET /webhook/outreach/health`
-
-**Response:**
-```json
-{
-  "status": "healthy",
-  "service": "outreach-agent-v1",
-  "timestamp": "2025-01-15T10:30:00.000Z",
-  "capabilities": ["email", "sms", "html_templates", "parallel_processing"]
-}
-```
-
-**Features:**
-- ✅ Respects candidate notification preferences (`notify_email`, `notify_sms`)
-- ✅ Professional HTML email templates with job match details
-- ✅ SMS notifications via Twilio (160 character limit)
-- ✅ Async concurrency control (configurable `MAX_CONCURRENT_TASKS`)
-- ✅ Webhook secret authentication (optional)
-- ✅ Automatic tracking of sent notifications in database
-- ✅ Uses Supabase RPC function `get_application_details` for data fetching
-
-**Note:**
-- Notifications are processed asynchronously in background tasks
-- Email uses SendGrid with HTML templates
-- SMS uses Twilio with phone number validation (E.164 format)
-- Concurrency is controlled by semaphore (default: 20, configurable via `MAX_CONCURRENT_TASKS`)
 
 ### Manual Apply API
 
@@ -875,61 +733,7 @@ Request → Validate Input → Fetch Candidate Data → Prepare SP Params → Ex
 
 ---
 
-## 🏗️ Architecture
 
-### How It Works
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         app/main.py                                │
-│  - Unified FastAPI Application                                     │
-│  - Lifespan Manager (startup/shutdown)                              │
-│  - Includes all 7 API routers                                      │
-│  - Initializes: caches, rate limiters, DB pools, semaphores         │
-└─────────────────────────────────────────────────────────────────────┘
-                        │
-        ┌───────────────┴───────────────┬───────────────┬──────────────┐
-        │                               │               │              │
-┌───────▼────────┐      ┌───────────────▼──────────┐   │              │
-│ Apply Webhook  │      │ Candidate Sync           │   │              │
-│ /webhook/      │      │ /candidate-sync          │   │              │
-│ cand-job-      │      │                          │   │              │
-│ matching       │      │                          │   │              │
-└───────┬────────┘      └───────────────┬──────────┘   │              │
-        │                               │               │              │
-┌───────▼────────┐      ┌───────────────▼──────────┐   │              │
-│ Webhook       │      │ SQL Server Query         │   │              │
-│ Processing    │      │ → Supabase Upsert        │   │              │
-│ - Validate    │      │                          │   │              │
-│ - Remote Check│      │                          │   │              │
-│ - Execute SP  │      │                          │   │              │
-│ - Track       │      │                          │   │              │
-└───────┬────────┘      └───────────────┬──────────┘   │              │
-        │                               │               │              │
-        │      ┌─────────────────────────▼──────────────┼──────────────┐
-        │      │                                         │              │
-┌───────▼──────▼────────┐      ┌────────────────────────▼──────────┐  │
-│ Resume Intake          │      │ Recommendations                   │  │
-│ /resume-intake/        │      │ /api/recommendations              │  │
-│ process-resume         │      │                                   │  │
-└───────┬───────────────┘      └───────────────┬───────────────────┘  │
-        │                                      │                      │
-┌───────▼───────────────┐      ┌───────────────▼───────────────────┐  │
-│ Resume Processing      │      │ Requirement Details              │  │
-│ - Parse (PDF/DOCX/TXT) │      │ /api/requirement/{id}            │  │
-│ - Structure (GPT-4o)  │      │                                   │  │
-│ - Store (Supabase)     │      │                                   │  │
-│ - Embed (OpenAI)       │      │                                   │  │
-│ - Vector (Qdrant)      │      │                                   │  │
-└───────┬───────────────┘      └───────────────┬───────────────────┘  │
-        │                                      │                      │
-        │      ┌───────────────────────────────▼──────────────────────┐
-        │      │                                                      │
-┌───────▼──────▼────────┐      ┌─────────────────────────────────────▼──┐
-│ Outreach Agent        │      │ Manual Apply                          │
-│ /webhook/outreach/     │      │ /apply-job                            │
-│ job-match              │      │                                       │
-└───────┬───────────────┘      └───────────────┬───────────────────────┘
         │                                      │
 ┌───────▼───────────────┐      ┌───────────────▼───────────────────────┐
 │ Notification          │      │ Manual Application                    │
@@ -1003,12 +807,9 @@ Request → Validate candidate_id → Check Cache → [If miss] Execute SP → C
 Request → Validate requirement_id → Check Cache → [If miss] Execute SP → Cache Result → Return Details
 ```
 
-**6. Outreach Agent Flow:**
-```
-Supabase Webhook → Validate → Queue Task → [Async] Fetch Details → Check Preferences → Send Email/SMS → Mark Sent
-```
 
-**7. Manual Apply Flow:**
+
+**6. Manual Apply Flow:**
 ```
 Request → Fetch Candidate Data → Prepare SP Params → Execute SP → Create Tracking Record → Return Success
 ```
@@ -1023,7 +824,7 @@ See `.env.example` for all available configuration options.
 
 **Required:**
 - `SUPABASE_URL` - Supabase project URL
-- `SUPABASE_SERVICE_KEY` or `SUPABASE_SERVICE_ROLE_KEY` - Service role key (for Apply Webhook, Candidate Sync, Manual Apply, and Outreach Agent)
+- `SUPABASE_SERVICE_KEY` or `SUPABASE_SERVICE_ROLE_KEY` - Service role key (for Apply Webhook, Candidate Sync, and Manual Apply)
 - `SQLSERVER_CONNECTION_STRING` OR individual `SQL_SERVER_*` parameters (for Apply Webhook, Candidate Sync, and Manual Apply)
 
 **Required for Resume Intake API:**
@@ -1043,22 +844,13 @@ See `.env.example` for all available configuration options.
 - `REQUIREMENT_DETAILS_DB_USER` / `REQUIREMENT_DETAILS_DB_PASSWORD` - SQL Server credentials (optional, uses Windows Auth if not provided)
 - `REQUIREMENT_DETAILS_DB_DRIVER` - ODBC driver name (default: `ODBC Driver 17 for SQL Server`)
 
-**Required for Outreach Agent V1 API:**
-- `SENDGRID_API_KEY` - SendGrid API key for sending emails
-- `SENDGRID_FROM_EMAIL` - Sender email address for SendGrid
-- `TWILIO_ACCOUNT_SID` - Twilio account SID
-- `TWILIO_AUTH_TOKEN` - Twilio authentication token
-- `TWILIO_PHONE_NUMBER` - Twilio phone number (E.164 format, e.g., +1234567890)
+
 
 **Required for Manual Apply API:**
 - Uses same SQL Server configuration as Apply Webhook API (`SQL_SERVER_*` parameters)
 - Uses same Supabase configuration as Apply Webhook API (`SUPABASE_SERVICE_KEY`)
 
-**Optional for Outreach Agent V1 API:**
-- `SENDGRID_REPLY_TO_EMAIL` - Reply-to email address (defaults to `SENDGRID_FROM_EMAIL`)
-- `WEBHOOK_SECRET` - Secret key for webhook authentication (optional, but recommended)
-- `MAX_CONCURRENT_TASKS` - Maximum concurrent notification tasks (default: 20)
-- `MODEL` - OpenAI model name (default: `gpt-4o-mini`, shared with Resume Intake API)
+
 
 **Optional:**
 - `LOG_LEVEL` - Logging level (default: INFO)
@@ -1185,31 +977,7 @@ Ensure all production environment variables are set securely (use secrets manage
 
 ---
 
-## 📝 Cleanup Instructions
 
-After verifying the unified application works correctly, you can safely delete the original project folders:
-
-```bash
-# Windows PowerShell
-Remove-Item -Recurse -Force Apply_API-master
-Remove-Item -Recurse -Force Candi_sync_api-main
-Remove-Item -Recurse -Force Resume_intake_API
-Remove-Item -Recurse -Force Get_Recommendations_API
-Remove-Item -Recurse -Force Get_RequirementDetails_API
-
-# Linux/Mac
-rm -rf Apply_API-master/
-rm -rf Candi_sync_api-main/
-rm -rf Resume_intake_API/
-rm -rf Get_Recommendations_API/
-rm -rf Get_RequirementDetails_API/
-```
-
-**Before deleting, ensure:**
-- ✅ The unified app runs: `python -m app.main` or `uvicorn app.main:app --reload`
-- ✅ All endpoints work correctly
-- ✅ All environment variables are configured
-- ✅ Test files are migrated (if needed)
 
 ---
 
@@ -1221,14 +989,6 @@ rm -rf Get_RequirementDetails_API/
 
 For issues and questions, please create an issue or contact the development team.
 
----
 
-## 📊 Migration Summary
 
-- **Total Files Migrated**: 30+ files
-- **New Files Created**: 40+ files
-- **Original Projects**: Fully preserved (can be deleted after verification)
-- **Code Reuse**: Shared database, Supabase, and utility modules
-- **Unified Configuration**: Single `.env` file for all APIs
-- **Single Deployment**: One FastAPI app, one port, unified infrastructure
-- **APIs Merged**: 7 APIs (Apply Webhook, Candidate Sync, Resume Intake, Get Recommendations, Get Requirement Details, Outreach Agent V1, Manual Apply)
+
