@@ -420,6 +420,12 @@ class Settings(BaseSettings):
         description="OpenAI model name (default: gpt-4o-mini)."
     )
 
+    encryption_key: Optional[SecretStr] = Field(
+        None,
+        alias="ENCRYPTION_KEY",
+        description="Master key for decrypting environment variables."
+    )
+
     model_config = SettingsConfigDict(
         env_file=(".env", str(Path.cwd() / ".env")),
         env_file_encoding="utf-8",
@@ -435,6 +441,48 @@ class Settings(BaseSettings):
 
     def model_post_init(self, __context):
         """Sync SUPABASE_SERVICE_KEY and SUPABASE_SERVICE_ROLE_KEY after initialization."""
+        
+        # 1. DECRYPTION LOGIC
+        # If we have an encryption key, try to decrypt all SecretStr fields
+        if self.encryption_key:
+            try:
+                from cryptography.fernet import Fernet
+                key = self.encryption_key.get_secret_value()
+                f = Fernet(key)
+                
+                # Iterate over all fields in the model
+                for field_name in self.model_fields:
+                    value = getattr(self, field_name)
+                    
+                    # We only encrypt fields that are SecretStr (or potentially str if needed, but SecretStr is safest)
+                    if isinstance(value, SecretStr):
+                        secret_val = value.get_secret_value()
+                        # Check magic header for Fernet
+                        if secret_val.startswith("gAAAA"):
+                            try:
+                                decrypted = f.decrypt(secret_val.encode()).decode()
+                                # Replace with decrypted value
+                                setattr(self, field_name, SecretStr(decrypted))
+                            except Exception:
+                                # If decryption fails (e.g. invalid token), leave it as is 
+                                # or log a warning (but we don't have logger here yet)
+                                pass
+                                
+                    # If you have plain string fields that might be encrypted, handle them here too
+                    elif isinstance(value, str):
+                        if value.startswith("gAAAA"):
+                            try:
+                                decrypted = f.decrypt(value.encode()).decode()
+                                setattr(self, field_name, decrypted)
+                            except Exception:
+                                pass
+                                
+            except ImportError:
+                print("⚠️ Warning: 'cryptography' not installed. Secrets cannot be decrypted.")
+            except Exception as e:
+                print(f"⚠️ Warning: Secret decryption failed: {e}")
+
+        # 2. VALIDATION LOGIC
         # Ensure at least one is set
         if not self.supabase_service_key and not self.supabase_service_role_key:
             raise ValueError("Either SUPABASE_SERVICE_KEY or SUPABASE_SERVICE_ROLE_KEY must be set")
