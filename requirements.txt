@@ -41,3 +41,4 @@ tenacity>=8.2.3  # Retry logic with exponential backoff
 sendgrid>=6.11.0  # Email notifications via SendGrid
 twilio>=9.3.0  # SMS notifications via Twilio
 
+cryptography
