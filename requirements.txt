@@ -34,8 +34,12 @@ aiocache>=0.12.2
 aiofiles>=23.2.1
 
 # Get Recommendations API dependencies
-redis>=5.0.1  # Optional: for distributed caching
+redis>=5.0.1  # Required for Celery broker/backend and distributed caching
 tenacity>=8.2.3  # Retry logic with exponential backoff
+
+# Background Task Processing (Celery)
+celery[redis]>=5.3.4  # Distributed task queue
+flower>=2.0.1  # Celery monitoring UI
 
 # Outreach Agent V1 API dependencies
 sendgrid>=6.11.0  # Email notifications via SendGrid

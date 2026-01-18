@@ -364,6 +364,30 @@ class Settings(BaseSettings):
         description="Rate limit for Requirement Details API (format: 'number/period', e.g., '100/minute')."
     )
 
+    # ========== Redis & Celery Configuration ==========
+    redis_url: str = Field(
+        "redis://localhost:6379/0",
+        alias="REDIS_URL",
+        description="Redis URL for Celery broker and backend (e.g., redis://localhost:6379/0)."
+    )
+    
+    celery_worker_concurrency: int = Field(
+        10,
+        alias="CELERY_WORKER_CONCURRENCY",
+        description="Number of concurrent Celery workers (default: 10)."
+    )
+    
+    celery_task_time_limit: int = Field(
+        300,
+        alias="CELERY_TASK_TIME_LIMIT",
+        description="Hard time limit for Celery tasks in seconds (default: 300 = 5 minutes)."
+    )
+    
+    celery_task_soft_time_limit: int = Field(
+        240,
+        alias="CELERY_TASK_SOFT_TIME_LIMIT",
+        description="Soft time limit for Celery tasks in seconds (default: 240 = 4 minutes)."
+    )
 
 
     # OpenAI Model Configuration (shared with Resume Intake API)
