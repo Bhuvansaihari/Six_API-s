@@ -38,8 +38,9 @@ async def lifespan(app: FastAPI):
     
     # Initialize SQL Server repository for candidate sync (if connection string is provided)
     if settings.sqlserver_connection_string:
+        conn_str = settings.get_decrypted_sqlserver_connection_string()
         app.state.sql_repo = SQLServerRepository(
-            settings.sqlserver_connection_string.get_secret_value(),
+            conn_str,
             connect_timeout=settings.sqlserver_connect_timeout,
             query_timeout=settings.sqlserver_query_timeout,
         )

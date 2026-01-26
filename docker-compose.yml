@@ -1,0 +1,67 @@
+version: '3.8'
+
+services:
+  # 1. FastAPI Application
+  api:
+    build: .
+    image: autoapply:latest
+    container_name: autoapply_api
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_WORKER_CONCURRENCY=10
+    env_file:
+      - .env
+    depends_on:
+      - redis
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+  # 2. Celery Worker (Background Tasks)
+  worker:
+    build: .
+    image: autoapply:latest  # Reuse the same image
+    container_name: autoapply_worker
+    volumes:
+      - .:/app
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+      - CELERY_WORKER_CONCURRENCY=10
+    env_file:
+      - .env
+    depends_on:
+      - redis
+      - api
+    command: celery -A app.celery_app worker --loglevel=info --concurrency=10
+
+  # 3. Flower (Monitoring Dashboard)
+  dashboard:
+    build: .
+    image: autoapply:latest
+    container_name: autoapply_flower
+    ports:
+      - "5555:5555"
+    volumes:
+      - .:/app
+    environment:
+      - REDIS_URL=redis://redis:6379/0
+    env_file:
+      - .env
+    depends_on:
+      - redis
+      - worker
+    command: celery -A app.celery_app flower --port=5555
+
+  # 4. Redis (Message Broker)
+  redis:
+    image: redis:7-alpine
+    container_name: autoapply_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+volumes:
+  redis_data:

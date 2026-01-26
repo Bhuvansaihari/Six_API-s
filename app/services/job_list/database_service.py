@@ -57,10 +57,12 @@ def _map_job_list_result_keys(result: Dict[str, Any]) -> Dict[str, Any]:
 
 
 async def execute_job_list_stored_procedure(
-    candidate_id: int
+    candidate_id: int,
+    page_no: int = 1,
+    page_size: int = 1000
 ) -> tuple[List[Dict[str, Any]], Optional[int]]:
     """
-    Execute the USP_AI_Get_JobList stored procedure.
+    Execute the USP_AI_Get_JobList stored procedure with pagination.
     
     This function executes the stored procedure asynchronously with retry logic
     for transient failures and returns the results with clean key names.
@@ -70,8 +72,12 @@ async def execute_job_list_stored_procedure(
     """
     if not candidate_id or candidate_id <= 0:
         raise ValueError("candidate_id must be a positive integer")
+    if page_no < 1:
+        raise ValueError("page_no must be greater than or equal to 1")
+    if page_size < 1:
+        raise ValueError("page_size must be greater than or equal to 1")
     
-    logger.info(f"Executing job list stored procedure for candidate_id={candidate_id}")
+    logger.info(f"Executing job list stored procedure for candidate_id={candidate_id}, page={page_no}, size={page_size}")
     
     settings = get_settings()
     # Reuse the existing recommendations DB pool
@@ -95,14 +101,16 @@ async def execute_job_list_stored_procedure(
                 try:
                     cursor = conn.cursor()
                     
-                    logger.debug(f"Executing stored procedure USP_AI_Get_JobList with candidate_id={candidate_id}")
+                    logger.debug(f"Executing stored procedure USP_AI_Get_JobList with candidate_id={candidate_id}, PageNo={page_no}, PageSize={page_size}")
                     
                     cursor.execute(
                         """
                         EXEC [dbo].[USP_AI_Get_JobList]
-                            @CandidateID = ?
+                            @CandidateID = ?,
+                            @PageNo = ?,
+                            @PageSize = ?
                         """,
-                        (candidate_id,)
+                        (candidate_id, page_no, page_size)
                     )
                     
                     results = []

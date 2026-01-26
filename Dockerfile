@@ -22,6 +22,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application code
 COPY . .
 
+# Make scripts executable
+# (Ignore error if scripts dir doesn't exist yet, though it should)
+RUN if [ -d "scripts" ]; then chmod +x scripts/*.sh; fi
+
 # Expose port
 EXPOSE 8000
 

@@ -427,6 +427,16 @@ class Settings(BaseSettings):
                 key = self.encryption_key.get_secret_value()
                 f = Fernet(key)
                 
+                # Explicitly handle sqlserver_connection_string to ensure it's decrypted for pyodbc
+                if self.sqlserver_connection_string:
+                    secret_val = self.sqlserver_connection_string.get_secret_value()
+                    if secret_val.startswith("gAAAA"):
+                        try:
+                            decrypted = f.decrypt(secret_val.encode()).decode()
+                            self.sqlserver_connection_string = SecretStr(decrypted)
+                        except Exception as e:
+                            print(f"⚠️ Warning: Failed to decrypt sqlserver_connection_string: {e}")
+
                 # Iterate over all fields in the model
                 for field_name in self.model_fields:
                     value = getattr(self, field_name)
@@ -453,7 +463,6 @@ class Settings(BaseSettings):
                                 setattr(self, field_name, decrypted)
                             except Exception:
                                 pass
-                                
             except ImportError:
                 print("⚠️ Warning: 'cryptography' not installed. Secrets cannot be decrypted.")
             except Exception as e:
@@ -461,8 +470,34 @@ class Settings(BaseSettings):
 
         # 2. VALIDATION LOGIC
         # Ensure at least one is set
-        if not self.supabase_service_key and not self.supabase_service_role_key:
-            raise ValueError("Either SUPABASE_SERVICE_KEY or SUPABASE_SERVICE_ROLE_KEY must be set")
+    def get_decrypted_sqlserver_connection_string(self) -> Optional[str]:
+        """
+        Robustly retrieve the decrypted SQL Server connection string.
+        
+        This method checks if the connection string is encrypted (starts with 'gAAAA')
+        and attempts to decrypt it using the ENCRYPTION_KEY.
+        If it's already plain text, or if decryption fails/is impossible, it returns the raw value.
+        """
+        if not self.sqlserver_connection_string:
+            return None
+        
+        raw_val = self.sqlserver_connection_string.get_secret_value()
+        
+        # If it looks encrypted (Fernet token representation)
+        if raw_val.startswith("gAAAA") and self.encryption_key:
+            try:
+                from cryptography.fernet import Fernet
+                key = self.encryption_key.get_secret_value()
+                f = Fernet(key)
+                decrypted = f.decrypt(raw_val.encode()).decode()
+                return decrypted
+            except Exception as e:
+                print(f"⚠️ Error decrypting connection string in helper: {e}")
+                # Return raw value as fallback (will likely fail in pyodbc if truly encrypted)
+                return raw_val
+        
+        return raw_val
+
 
 
 @lru_cache

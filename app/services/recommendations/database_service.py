@@ -156,7 +156,9 @@ def _is_retryable_error(exception: Exception) -> bool:
 
 
 async def execute_list_stored_procedure(
-    candidate_id: int
+    candidate_id: int,
+    page_no: int = 1,
+    page_size: int = 1000
 ) -> tuple[List[Dict[str, Any]], Optional[int]]:
     """
     Execute the USP_AI_Get_JobSeekerRecommenededJobList stored procedure.
@@ -169,8 +171,12 @@ async def execute_list_stored_procedure(
     """
     if not candidate_id or candidate_id <= 0:
         raise ValueError("candidate_id must be a positive integer")
+    if page_no < 1:
+        raise ValueError("page_no must be greater than or equal to 1")
+    if page_size < 1:
+        raise ValueError("page_size must be greater than or equal to 1")
     
-    logger.info(f"Executing list stored procedure for candidate_id={candidate_id}")
+    logger.info(f"Executing list stored procedure for candidate_id={candidate_id}, page={page_no}, size={page_size}")
     
     settings = get_settings()
     db_pool = await get_db_pool()
@@ -193,14 +199,16 @@ async def execute_list_stored_procedure(
                 try:
                     cursor = conn.cursor()
                     
-                    logger.debug(f"Executing stored procedure USP_AI_Get_JobSeekerRecommenededJobList with candidate_id={candidate_id}")
+                    logger.debug(f"Executing stored procedure USP_AI_Get_JobSeekerRecommenededJobList with candidate_id={candidate_id}, PageNo={page_no}, PageSize={page_size}")
                     
                     cursor.execute(
                         """
                         EXEC [dbo].[USP_AI_Get_JobSeekerRecommenededJobList]
-                            @CandidateID = ?
+                            @CandidateID = ?,
+                            @PageNo = ?,
+                            @PageSize = ?
                         """,
-                        (candidate_id,)
+                        (candidate_id, page_no, page_size)
                     )
                     
                     results = []
@@ -500,6 +508,8 @@ async def execute_details_stored_procedure(
 
 async def get_recommendations_list(
     candidate_id: int,
+    page_no: int = 1,
+    page_size: int = 1000,
     use_cache: bool = True
 ) -> Dict[str, Any]:
     """
@@ -512,18 +522,24 @@ async def get_recommendations_list(
     if use_cache:
         from app.services.recommendations.cache_manager import get_cache_manager
         cache = get_cache_manager()
-        cached_result = cache.get_list(candidate_id)
+        cached_result = cache.get_list(candidate_id, page_no=page_no, page_size=page_size)
         
         if cached_result is not None:
-            logger.info(f"Returning cached list results for candidate_id={candidate_id}")
+            logger.info(f"Returning cached list results for candidate_id={candidate_id}, page={page_no}")
             return cached_result
     
     # Execute stored procedure
-    recommendations, total_count = await execute_list_stored_procedure(candidate_id=candidate_id)
+    recommendations, total_count = await execute_list_stored_procedure(
+        candidate_id=candidate_id,
+        page_no=page_no,
+        page_size=page_size
+    )
     
     # Build response
     response = {
         "candidate_id": candidate_id,
+        "page_no": page_no,
+        "page_size": page_size,
         "recommendations": recommendations,
         "total_count": total_count
     }
@@ -532,7 +548,7 @@ async def get_recommendations_list(
     if use_cache:
         from app.services.recommendations.cache_manager import get_cache_manager
         cache = get_cache_manager()
-        cache.set_list(candidate_id, response)
+        cache.set_list(candidate_id, response, page_no=page_no, page_size=page_size)
     
     return response
 

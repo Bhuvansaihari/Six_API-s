@@ -41,39 +41,49 @@ router = APIRouter(
 async def get_job_list(
     request: Request,
     candidate_id: int = Query(..., description="Candidate ID (required)"),
+    page_no: int = Query(1, description="Page number (default: 1)", ge=1),
+    page_size: int = Query(1000, description="Items per page (default: 1000)", ge=1, le=1000),
     use_cache: bool = Query(True, description="Whether to use cached results")
 ):
     """
-    Get job list for a candidate.
+    Get job list for a candidate with pagination.
     
     Args:
         request: FastAPI request object (for rate limiting)
         candidate_id: The candidate ID to get jobs for
+        page_no: Page number (default: 1)
+        page_size: Items per page (default: 10)
         use_cache: Whether to use caching (default: True)
         
     Returns:
         JSON response with job list and total count
     """
     try:
-        logger.info(f"Received request for job list: candidate_id={candidate_id}")
+        logger.info(f"Received request for job list: candidate_id={candidate_id}, page={page_no}, size={page_size}")
         
         # Check cache if enabled
         if use_cache:
             cache_manager = get_cache_manager()
-            cached_result = cache_manager.get_list(candidate_id=candidate_id)
+            cached_result = cache_manager.get_list(candidate_id=candidate_id, page_no=page_no, page_size=page_size)
             if cached_result:
                 logger.info(
-                    f"Returning cached job list for candidate_id={candidate_id}",
+                    f"Returning cached job list for candidate_id={candidate_id}, page={page_no}",
                     extra={'log_to_db': True, 'service_name': 'job_list', 'candidate_id': candidate_id, 'cache_hit': True}
                 )
                 return cached_result
 
         # Execute stored procedure
-        job_list, total_count = await execute_job_list_stored_procedure(candidate_id=candidate_id)
+        job_list, total_count = await execute_job_list_stored_procedure(
+            candidate_id=candidate_id, 
+            page_no=page_no, 
+            page_size=page_size
+        )
         
         # Build response
         response = {
             "candidate_id": candidate_id,
+            "page_no": page_no,
+            "page_size": page_size,
             "job_list": job_list,
             "total_count": total_count
         }
@@ -81,10 +91,15 @@ async def get_job_list(
         # Cache the result if caching is enabled
         if use_cache:
             cache_manager = get_cache_manager()
-            cache_manager.set_list(candidate_id=candidate_id, value=response)
+            cache_manager.set_list(
+                candidate_id=candidate_id, 
+                value=response, 
+                page_no=page_no, 
+                page_size=page_size
+            )
         
         logger.info(
-            f"Successfully retrieved job list for candidate_id={candidate_id}",
+            f"Successfully retrieved job list for candidate_id={candidate_id}, page={page_no}",
             extra={'log_to_db': True, 'service_name': 'job_list', 'candidate_id': candidate_id, 'count': total_count}
         )
         

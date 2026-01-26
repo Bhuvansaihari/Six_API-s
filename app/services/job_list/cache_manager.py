@@ -37,13 +37,13 @@ class CacheManager:
         self.default_ttl = default_ttl
         logger.info(f"Job List Cache manager initialized with TTL: {default_ttl}s")
     
-    def _generate_list_key(self, candidate_id: int) -> str:
+    def _generate_list_key(self, candidate_id: int, page_no: int, page_size: int) -> str:
         """Generate a cache key for job list."""
-        return f"jobs:list:{candidate_id}"
+        return f"jobs:list:{candidate_id}:{page_no}:{page_size}"
 
-    def get_list(self, candidate_id: int) -> Optional[Any]:
+    def get_list(self, candidate_id: int, page_no: int = 1, page_size: int = 1000) -> Optional[Any]:
         """Retrieve list results from the cache if it exists and hasn't expired."""
-        key = self._generate_list_key(candidate_id)
+        key = self._generate_list_key(candidate_id, page_no, page_size)
         
         if key not in self._cache:
             logger.debug(f"Cache miss for key: {key}")
@@ -63,10 +63,12 @@ class CacheManager:
         self,
         candidate_id: int,
         value: Any,
+        page_no: int = 1,
+        page_size: int = 1000,
         ttl: Optional[int] = None
     ) -> None:
         """Store list results in the cache with an expiration time."""
-        key = self._generate_list_key(candidate_id)
+        key = self._generate_list_key(candidate_id, page_no, page_size)
         expiration_time = time.time() + (ttl or self.default_ttl)
         self._cache[key] = (value, expiration_time)
         logger.debug(f"Value cached with key: {key}, expires in {ttl or self.default_ttl}s")
@@ -130,14 +132,14 @@ class RedisCacheManager:
             logger.error(f"Failed to connect to Redis: {e}")
             raise RuntimeError(f"Failed to connect to Redis: {e}") from e
     
-    def _generate_list_key(self, candidate_id: int) -> str:
+    def _generate_list_key(self, candidate_id: int, page_no: int, page_size: int) -> str:
         """Generate a cache key for job list."""
-        return f"jobs:list:{candidate_id}"
+        return f"jobs:list:{candidate_id}:{page_no}:{page_size}"
 
-    def get_list(self, candidate_id: int) -> Optional[Any]:
+    def get_list(self, candidate_id: int, page_no: int = 1, page_size: int = 1000) -> Optional[Any]:
         """Retrieve list results from Redis cache."""
         try:
-            key = self._generate_list_key(candidate_id)
+            key = self._generate_list_key(candidate_id, page_no, page_size)
             cached_value = self.redis_client.get(key)
             
             if cached_value is None:
@@ -157,11 +159,13 @@ class RedisCacheManager:
         self,
         candidate_id: int,
         value: Any,
+        page_no: int = 1,
+        page_size: int = 1000,
         ttl: Optional[int] = None
     ) -> None:
         """Store list results in Redis cache with TTL."""
         try:
-            key = self._generate_list_key(candidate_id)
+            key = self._generate_list_key(candidate_id, page_no, page_size)
             serialized_value = json.dumps(value)
             ttl_seconds = ttl or self.default_ttl
             

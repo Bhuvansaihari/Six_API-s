@@ -30,10 +30,12 @@ router = APIRouter(prefix="/api/recommendations", tags=["recommendations"])
 async def get_job_recommendations_list(
     request: Request,
     candidate_id: int = Query(..., description="The candidate ID to get recommendations for", gt=0),
+    page_no: int = Query(1, description="Page number (default: 1)", ge=1),
+    page_size: int = Query(1000, description="Items per page (default: 1000)", ge=1, le=1000),
     use_cache: Optional[bool] = Query(True, description="Whether to use cache for this request")
 ) -> JSONResponse:
     """
-    Get job recommendations list (summary) for a candidate.
+    Get job recommendations list (summary) for a candidate with pagination.
     
     This endpoint executes the USP_AI_Get_JobSeekerRecommenededJobList stored procedure
     with the provided candidate_id and returns a summary list of job recommendations.
@@ -41,11 +43,15 @@ async def get_job_recommendations_list(
     Args:
         request: FastAPI request object (for rate limiting)
         candidate_id: The candidate ID (required, must be > 0)
+        page_no: Page number (default: 1)
+        page_size: Items per page (default: 10)
         use_cache: Whether to use cache. Defaults to True.
         
     Returns:
         JSONResponse: JSON response containing:
             - candidate_id: The candidate ID
+            - page_no: The page number
+            - page_size: The items per page
             - recommendations: List of job recommendations with requirement_id, job_title, location, source_id
             - total_count: Total number of recommendations available
             
@@ -58,13 +64,15 @@ async def get_job_recommendations_list(
     """
     try:
         settings = get_settings()
-        logger.info(f"Received list request for candidate_id={candidate_id}, use_cache={use_cache}")
+        logger.info(f"Received list request for candidate_id={candidate_id}, page={page_no}, size={page_size}, use_cache={use_cache}")
         
         # Execute with timeout
         try:
             result = await asyncio.wait_for(
                 get_recommendations_list(
                     candidate_id=candidate_id,
+                    page_no=page_no,
+                    page_size=page_size,
                     use_cache=use_cache
                 ),
                 timeout=settings.recommendations_request_timeout
@@ -78,7 +86,7 @@ async def get_job_recommendations_list(
         
         logger.info(
             f"Successfully retrieved {len(result.get('recommendations', []))} "
-            f"recommendations for candidate_id={candidate_id}",
+            f"recommendations for candidate_id={candidate_id}, page={page_no}",
             extra={'log_to_db': True, 'service_name': 'recommendations', 'candidate_id': candidate_id, 'count': len(result.get('recommendations', []))}
         )
         
